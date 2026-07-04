@@ -103,12 +103,18 @@ export default function MapPicker({
     }
   }, [dropoffMarker]);
 
-  // Update driver marker
+  // Update driver marker — smooth move with setLatLng
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
-    if (driverRef.current) { driverRef.current.remove(); driverRef.current = null; }
-    if (driverMarker) {
+    if (!driverMarker) {
+      driverRef.current?.remove();
+      driverRef.current = null;
+      return;
+    }
+    if (driverRef.current) {
+      driverRef.current.setLatLng([driverMarker.lat, driverMarker.lng]);
+    } else {
       driverRef.current = L.marker([driverMarker.lat, driverMarker.lng], { icon: driverIcon }).addTo(map);
     }
   }, [driverMarker]);
