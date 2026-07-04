@@ -13,10 +13,44 @@ interface Props {
   icon?: string;
 }
 
+const GMAPS_KEY = import.meta.env.VITE_GOOGLE_MAPS_KEY;
+
+async function searchNominatim(q: string): Promise<Suggestion[]> {
+  const res = await fetch(
+    `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q + ', Rīga')}&format=json&limit=5&countrycodes=lv`,
+    { headers: { 'Accept-Language': 'lv' } }
+  );
+  return res.json();
+}
+
+async function searchGooglePlaces(q: string): Promise<Suggestion[]> {
+  const res = await fetch(
+    `https://maps.googleapis.com/maps/api/place/autocomplete/json?input=${encodeURIComponent(q)}&location=56.946,24.105&radius=30000&language=lv&components=country:lv&key=${GMAPS_KEY}`
+  );
+  const data = await res.json();
+  if (!data.predictions) return [];
+
+  const details = await Promise.all(
+    data.predictions.slice(0, 5).map(async (p: { place_id: string; description: string }) => {
+      const r = await fetch(
+        `https://maps.googleapis.com/maps/api/place/details/json?place_id=${p.place_id}&fields=geometry,formatted_address&key=${GMAPS_KEY}`
+      );
+      const d = await r.json();
+      return {
+        display_name: p.description,
+        lat: String(d.result?.geometry?.location?.lat ?? ''),
+        lon: String(d.result?.geometry?.location?.lng ?? ''),
+      };
+    })
+  );
+  return details.filter(s => s.lat);
+}
+
 export default function AddressSearch({ placeholder, value, onChange, icon = '📍' }: Props) {
   const [query, setQuery] = useState(value);
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [open, setOpen] = useState(false);
+  const [loading, setLoading] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
 
   useEffect(() => { setQuery(value); }, [value]);
@@ -26,20 +60,23 @@ export default function AddressSearch({ placeholder, value, onChange, icon = '�
     clearTimeout(timer.current);
     if (q.length < 3) { setSuggestions([]); return; }
     timer.current = setTimeout(async () => {
+      setLoading(true);
       try {
-        const res = await fetch(
-          `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q + ', Rīga')}&format=json&limit=5&countrycodes=lv`,
-          { headers: { 'Accept-Language': 'lv' } }
-        );
-        const data = await res.json();
-        setSuggestions(data);
+        const results = GMAPS_KEY
+          ? await searchGooglePlaces(q)
+          : await searchNominatim(q);
+        setSuggestions(results);
         setOpen(true);
-      } catch { /* ignore */ }
-    }, 400);
+      } catch { /* ignore */ } finally {
+        setLoading(false);
+      }
+    }, 350);
   }
 
   function pick(s: Suggestion) {
-    const short = s.display_name.split(',').slice(0, 2).join(',').trim();
+    const short = GMAPS_KEY
+      ? s.display_name.split(',').slice(0, 2).join(',').trim()
+      : s.display_name.split(',').slice(0, 2).join(',').trim();
     setQuery(short);
     setSuggestions([]);
     setOpen(false);
@@ -57,7 +94,8 @@ export default function AddressSearch({ placeholder, value, onChange, icon = '�
           onChange={(e) => search(e.target.value)}
           onFocus={() => suggestions.length > 0 && setOpen(true)}
         />
-        {query && (
+        {loading && <span className="text-slate-500 text-xs animate-pulse">...</span>}
+        {!loading && query && (
           <button onClick={() => { setQuery(''); setSuggestions([]); }} className="text-slate-500 text-xs">✕</button>
         )}
       </div>
