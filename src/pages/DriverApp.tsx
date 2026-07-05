@@ -14,6 +14,7 @@ interface OfferData {
   pickup: string; dropoff: string;
   price: string; distanceKm: string;
   pickupLat: number; pickupLng: number;
+  dropoffLat: number; dropoffLng: number;
 }
 
 const CATS: { id: Category; icon: string; label: string }[] = [
@@ -57,6 +58,8 @@ export default function DriverApp({ telegramId, userName }: Props) {
   const [offer, setOffer]         = useState<OfferData | null>(null);
   const [activeRideId, setActiveRideId] = useState<number | null>(null);
   const [rideStatus, setRideStatus]     = useState<string>('');
+  const [activePickup, setActivePickup] = useState<{ lat: number; lng: number; address: string } | null>(null);
+  const [activeDropoff, setActiveDropoff] = useState<{ lat: number; lng: number; address: string } | null>(null);
   const [driverPos, setDriverPos]       = useState<{ lat: number; lng: number } | null>(null);
   const geoWatchRef = useRef<number | null>(null);
   const [history, setHistory]           = useState<RideHistoryItem[]>([]);
@@ -124,7 +127,13 @@ export default function DriverApp({ telegramId, userName }: Props) {
     if (!offer) return;
     haptic(accept ? 'medium' : 'light');
     await respondToOffer(offer.offerId, accept, telegramId);
-    if (accept) { setActiveRideId(offer.rideId); setRideStatus('driver_assigned'); setStep('active'); }
+    if (accept) {
+      setActiveRideId(offer.rideId);
+      setRideStatus('driver_assigned');
+      setActivePickup({ lat: offer.pickupLat, lng: offer.pickupLng, address: offer.pickup });
+      setActiveDropoff({ lat: offer.dropoffLat, lng: offer.dropoffLng, address: offer.dropoff });
+      setStep('active');
+    }
     else setStep('dashboard');
     setOffer(null);
   }
@@ -315,6 +324,16 @@ export default function DriverApp({ telegramId, userName }: Props) {
               </div>
             </div>
 
+            {/* nav button */}
+            <a
+              href={`https://www.google.com/maps/dir/?api=1&destination=${offer.pickupLat},${offer.pickupLng}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center justify-center gap-2 w-full bg-blue-500/15 border border-blue-500/30 text-blue-300 font-semibold py-3 rounded-2xl text-sm mb-3"
+            >
+              🗺 Navigēt uz pasažieri
+            </a>
+
             {/* action buttons */}
             <div className="flex gap-3">
               <button onClick={() => handleOfferResponse(false)}
@@ -380,6 +399,22 @@ export default function DriverApp({ telegramId, userName }: Props) {
                 })}
               </div>
             </div>
+
+            {/* navigation */}
+            {activePickup && rideStatus === 'driver_assigned' && (
+              <a href={`https://www.google.com/maps/dir/?api=1&destination=${activePickup.lat},${activePickup.lng}`}
+                target="_blank" rel="noopener noreferrer"
+                className="flex items-center justify-center gap-2 w-full bg-blue-500/15 border border-blue-500/30 text-blue-300 font-semibold py-3 rounded-2xl text-sm mb-2">
+                🗺 Navigēt uz pasažieri
+              </a>
+            )}
+            {activeDropoff && rideStatus === 'trip_started' && (
+              <a href={`https://www.google.com/maps/dir/?api=1&destination=${activeDropoff.lat},${activeDropoff.lng}`}
+                target="_blank" rel="noopener noreferrer"
+                className="flex items-center justify-center gap-2 w-full bg-blue-500/15 border border-blue-500/30 text-blue-300 font-semibold py-3 rounded-2xl text-sm mb-2">
+                🗺 Navigēt uz galamērķi
+              </a>
+            )}
 
             {/* action buttons */}
             <div className="space-y-2">
