@@ -6,6 +6,26 @@ import { getQuote, requestRide, getRideStatus, cancelRide, getCancelPolicy, rate
 import { haptic } from '../telegram';
 
 interface LatLng { lat: number; lng: number }
+
+async function reverseGeocode(lat: number, lng: number): Promise<string> {
+  try {
+    const res = await fetch(
+      `https://photon.komoot.io/reverse?lat=${lat}&lon=${lng}&limit=1`,
+      { headers: { 'Accept-Language': 'lv' } }
+    );
+    const data = await res.json();
+    const p = data.features?.[0]?.properties;
+    if (!p) return `${lat.toFixed(4)}, ${lng.toFixed(4)}`;
+    const parts: string[] = [];
+    if (p.street && p.housenumber) parts.push(`${p.street} ${p.housenumber}`);
+    else if (p.street) parts.push(p.street);
+    else if (p.name) parts.push(p.name);
+    if (p.city) parts.push(p.city);
+    return parts.join(', ') || `${lat.toFixed(4)}, ${lng.toFixed(4)}`;
+  } catch {
+    return `${lat.toFixed(4)}, ${lng.toFixed(4)}`;
+  }
+}
 type Step = 'home' | 'confirm' | 'searching' | 'active' | 'rating' | 'history';
 interface Props { userId: number }
 
@@ -133,11 +153,12 @@ export default function PassengerApp({ userId }: Props) {
             dropoffMarker={dropoff}
             driverMarker={rideStatus?.driver_location ?? null}
             routePolyline={step === 'confirm' ? quote?.encodedPolyline ?? null : null}
-            onMapClick={(pos) => {
+            onMapClick={async (pos) => {
               if (step !== 'home') return;
               haptic('light');
-              if (!pickup) setPickup({ ...pos, address: `${pos.lat.toFixed(4)}, ${pos.lng.toFixed(4)}` });
-              else setDropoff({ ...pos, address: `${pos.lat.toFixed(4)}, ${pos.lng.toFixed(4)}` });
+              const address = await reverseGeocode(pos.lat, pos.lng);
+              if (!pickup) setPickup({ ...pos, address });
+              else setDropoff({ ...pos, address });
             }}
             interactive={step === 'home'}
           />
