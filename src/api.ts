@@ -87,6 +87,7 @@ export async function requestRide(params: {
   route_duration_seconds?: number;
   route_polyline?: string;
   scheduled_at?: string;
+  passenger_comment?: string;
 }): Promise<{ ok: boolean; ride: Ride; share_url?: string; error?: string }> {
   return post('/rides/request', params);
 }

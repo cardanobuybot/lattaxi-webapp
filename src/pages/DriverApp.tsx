@@ -15,6 +15,7 @@ interface OfferData {
   price: string; distanceKm: string;
   pickupLat: number; pickupLng: number;
   dropoffLat: number; dropoffLng: number;
+  passengerComment: string | null;
 }
 
 const CATS: { id: Category; icon: string; label: string }[] = [
@@ -312,6 +313,16 @@ export default function DriverApp({ telegramId, userName }: Props) {
               </div>
 
               <div className="h-px bg-[#ffffff08]" />
+
+              {offer.passengerComment && (
+                <>
+                  <div className="flex items-start gap-2.5">
+                    <span className="text-slate-500 text-sm mt-0.5">💬</span>
+                    <span className="text-slate-300 text-sm italic">{offer.passengerComment}</span>
+                  </div>
+                  <div className="h-px bg-[#ffffff08]" />
+                </>
+              )}
 
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">

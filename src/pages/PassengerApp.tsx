@@ -32,6 +32,7 @@ export default function PassengerApp({ userId }: Props) {
   const [histLoading, setHistLoad] = useState(false);
   const [cancelModal, setCancelModal] = useState<{ fee: number; reason: string } | null>(null);
   const [cancelling, setCancelling]   = useState(false);
+  const [comment, setComment]         = useState('');
 
   useEffect(() => {
     if (!pickup || !dropoff) return;
@@ -70,6 +71,7 @@ export default function PassengerApp({ userId }: Props) {
       route_distance_meters:  quote?.distanceMeters,
       route_duration_seconds: quote?.durationSeconds,
       route_polyline:         quote?.encodedPolyline,
+      passenger_comment:      comment || undefined,
     });
     setBooking(false);
     if (res.ok) { setRide(res.ride); setStep('searching'); }
@@ -258,6 +260,18 @@ export default function PassengerApp({ userId }: Props) {
                 })}
               </div>
             )}
+
+            {/* comment */}
+            <div className="bg-[#252836] rounded-2xl px-4 py-1 flex items-center gap-2">
+              <span className="text-slate-500 text-base">💬</span>
+              <input
+                className="flex-1 bg-transparent text-sm text-white placeholder-slate-500 outline-none py-3.5"
+                placeholder="Komentārs braucējam (neobligāti)"
+                value={comment}
+                onChange={e => setComment(e.target.value)}
+                maxLength={120}
+              />
+            </div>
 
             <button
               onClick={handleBook}
