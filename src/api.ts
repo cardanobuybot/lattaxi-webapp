@@ -121,3 +121,32 @@ export async function registerDriver(params: {
 export async function setDriverStatus(telegramId: number, status: 'online' | 'offline') {
   return post(`/drivers/${telegramId}/status`, { status });
 }
+
+export interface RideHistoryItem {
+  id: number;
+  status: string;
+  pickup_address: string;
+  dropoff_address: string;
+  estimated_price: string;
+  final_price: string | null;
+  created_at: string;
+  passenger_rating: number | null;
+  tip_amount: string;
+  route_distance_meters: number | null;
+  driver_name?: string;
+  driver_car?: string;
+  driver_car_number?: string;
+  driver_rating?: number;
+}
+
+export async function getPassengerHistory(passengerUserId: number, offset = 0) {
+  return get<{ ok: boolean; rides: RideHistoryItem[]; total: number }>(
+    `/rides/history/passenger?passenger_user_id=${passengerUserId}&offset=${offset}`
+  );
+}
+
+export async function getDriverHistory(telegramId: number, offset = 0) {
+  return get<{ ok: boolean; rides: RideHistoryItem[]; total: number }>(
+    `/rides/history/driver?telegram_id=${telegramId}&offset=${offset}`
+  );
+}

@@ -1,14 +1,14 @@
 import { useState, useEffect, useRef } from 'react';
 import MapPicker from '../components/MapPicker';
-import type { Category } from '../api';
-import { registerDriver, setDriverStatus, getRideStatus } from '../api';
+import type { Category, RideHistoryItem } from '../api';
+import { registerDriver, setDriverStatus, getRideStatus, getDriverHistory } from '../api';
 import { haptic } from '../telegram';
 
 const API = import.meta.env.VITE_API_URL ?? 'https://api.lattaxi.lv';
 
 interface Props { telegramId: number; userName: string }
 
-type DriverStep = 'register' | 'dashboard' | 'offer' | 'active';
+type DriverStep = 'register' | 'dashboard' | 'offer' | 'active' | 'history';
 
 interface OfferData {
   rideId: number;
@@ -58,6 +58,8 @@ export default function DriverApp({ telegramId, userName }: Props) {
   const [rideStatus, setRideStatus] = useState<string>('');
   const [driverPos, setDriverPos] = useState<{ lat: number; lng: number } | null>(null);
   const geoWatchRef = useRef<number | null>(null);
+  const [history, setHistory] = useState<RideHistoryItem[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
 
   // Start/stop GPS tracking when online
   useEffect(() => {
@@ -143,6 +145,17 @@ export default function DriverApp({ telegramId, userName }: Props) {
       setStep('dashboard');
     }
     setOffer(null);
+  }
+
+  async function openHistory() {
+    setStep('history');
+    setHistoryLoading(true);
+    try {
+      const r = await getDriverHistory(telegramId);
+      if (r.ok) setHistory(r.rides);
+    } finally {
+      setHistoryLoading(false);
+    }
   }
 
   async function handleStatusUpdate(newStatus: string) {
@@ -233,8 +246,16 @@ export default function DriverApp({ telegramId, userName }: Props) {
                 )}
               </div>
             ) : (
-              <div className="bg-slate-800 rounded-xl p-4 text-center">
-                <div className="text-sm text-slate-400">Nospied Online, lai saņemtu pasūtījumus</div>
+              <div className="space-y-2">
+                <div className="bg-slate-800 rounded-xl p-4 text-center">
+                  <div className="text-sm text-slate-400">Nospied Online, lai saņemtu pasūtījumus</div>
+                </div>
+                <button
+                  onClick={openHistory}
+                  className="w-full border border-slate-700 text-slate-400 py-2.5 rounded-xl text-xs font-medium flex items-center justify-center gap-2"
+                >
+                  🕐 Braucienu vēsture
+                </button>
               </div>
             )}
           </div>
@@ -324,6 +345,48 @@ export default function DriverApp({ telegramId, userName }: Props) {
               🏁 Pabeigt braucienu
             </button>
           </div>
+        </div>
+      )}
+
+      {/* History */}
+      {step === 'history' && (
+        <div className="flex-1 overflow-y-auto px-4 pt-4 space-y-3">
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider">Braucienu vēsture</h2>
+            <button onClick={() => setStep('dashboard')} className="text-slate-400 text-xs">✕ Aizvērt</button>
+          </div>
+          {historyLoading && (
+            <div className="text-center py-8 text-slate-500 text-sm animate-pulse">Ielādē...</div>
+          )}
+          {!historyLoading && history.length === 0 && (
+            <div className="text-center py-8 text-slate-500 text-sm">Nav braucienu vēstures</div>
+          )}
+          {history.map(r => {
+            const price = Number(r.final_price ?? r.estimated_price ?? 0);
+            const tip = Number(r.tip_amount ?? 0);
+            return (
+              <div key={r.id} className="bg-slate-800 rounded-xl p-3 space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-slate-500">#{r.id} · {new Date(r.created_at).toLocaleDateString('lv-LV')}</span>
+                  <span className={`text-xs font-medium ${r.status === 'trip_completed' ? 'text-green-400' : 'text-red-400'}`}>
+                    {r.status === 'trip_completed' ? '✓ Pabeigts' : '✕ Atcelts'}
+                  </span>
+                </div>
+                <div className="text-xs text-slate-300 truncate">🟢 {r.pickup_address || '—'}</div>
+                <div className="text-xs text-slate-300 truncate">🔴 {r.dropoff_address || '—'}</div>
+                <div className="flex items-center justify-between pt-1">
+                  {r.passenger_rating != null
+                    ? <span className="text-xs text-slate-500">{'⭐'.repeat(r.passenger_rating)} no pasažiera</span>
+                    : <span />
+                  }
+                  <div className="text-right">
+                    <div className="text-sm font-bold text-brand">€{price.toFixed(2)}</div>
+                    {tip > 0 && <div className="text-xs text-green-400">+€{tip.toFixed(2)} dzer.</div>}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
         </div>
       )}
     </div>

@@ -2,13 +2,13 @@ import { useState, useEffect } from 'react';
 import MapPicker from '../components/MapPicker';
 import CategoryCard from '../components/CategoryCard';
 import AddressSearch from '../components/AddressSearch';
-import type { Category, QuoteResult, Ride, RideStatus } from '../api';
-import { getQuote, requestRide, getRideStatus, cancelRide, rateRide } from '../api';
+import type { Category, QuoteResult, Ride, RideStatus, RideHistoryItem } from '../api';
+import { getQuote, requestRide, getRideStatus, cancelRide, rateRide, getPassengerHistory } from '../api';
 import { haptic } from '../telegram';
 
 interface LatLng { lat: number; lng: number }
 
-type Step = 'pickup' | 'dropoff' | 'confirm' | 'searching' | 'active' | 'rating';
+type Step = 'pickup' | 'dropoff' | 'confirm' | 'searching' | 'active' | 'rating' | 'history';
 
 interface Props { userId: number }
 
@@ -28,6 +28,8 @@ export default function PassengerApp({ userId }: Props) {
   const [tip, setTip] = useState(0);
   const [rated, setRated] = useState(false);
   const [mapClickMode, setMapClickMode] = useState<'pickup' | 'dropoff'>('pickup');
+  const [history, setHistory] = useState<RideHistoryItem[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
 
   // Fetch route quote when both points set
   useEffect(() => {
@@ -87,6 +89,17 @@ export default function PassengerApp({ userId }: Props) {
     if (res.ok) {
       setRide(res.ride);
       setStep('searching');
+    }
+  }
+
+  async function openHistory() {
+    setStep('history');
+    setHistoryLoading(true);
+    try {
+      const r = await getPassengerHistory(userId);
+      if (r.ok) setHistory(r.rides);
+    } finally {
+      setHistoryLoading(false);
     }
   }
 
@@ -173,6 +186,12 @@ export default function PassengerApp({ userId }: Props) {
                 </button>
               ))}
             </div>
+            <button
+              onClick={openHistory}
+              className="w-full border border-slate-700 text-slate-400 py-2.5 rounded-xl text-xs font-medium flex items-center justify-center gap-2"
+            >
+              🕐 Braucienu vēsture
+            </button>
           </div>
         )}
 
@@ -332,9 +351,57 @@ export default function PassengerApp({ userId }: Props) {
             )}
           </div>
         )}
+
+        {/* ---- HISTORY ---- */}
+        {step === 'history' && (
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider">Braucienu vēsture</h2>
+              <button onClick={() => setStep('pickup')} className="text-slate-400 text-xs">✕ Aizvērt</button>
+            </div>
+            {historyLoading && (
+              <div className="text-center py-8 text-slate-500 text-sm animate-pulse">Ielādē...</div>
+            )}
+            {!historyLoading && history.length === 0 && (
+              <div className="text-center py-8 text-slate-500 text-sm">Nav braucienu vēstures</div>
+            )}
+            {history.map(r => (
+              <div key={r.id} className="bg-slate-800 rounded-xl p-3 space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-slate-500">#{r.id} · {new Date(r.created_at).toLocaleDateString('lv-LV')}</span>
+                  <HistoryStatusBadge status={r.status} />
+                </div>
+                <div className="text-xs text-slate-300 truncate">🟢 {r.pickup_address || '—'}</div>
+                <div className="text-xs text-slate-300 truncate">🔴 {r.dropoff_address || '—'}</div>
+                <div className="flex items-center justify-between pt-1">
+                  <div className="text-xs text-slate-500">
+                    {r.driver_name ? `🚗 ${r.driver_name} · ${r.driver_car}` : ''}
+                  </div>
+                  <div className="text-sm font-bold text-brand">
+                    €{Number(r.final_price ?? r.estimated_price ?? 0).toFixed(2)}
+                  </div>
+                </div>
+                {r.passenger_rating != null && (
+                  <div className="text-xs text-slate-500">{'⭐'.repeat(r.passenger_rating)} novērtēts</div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
       </div>
     </div>
   );
+}
+
+function HistoryStatusBadge({ status }: { status: string }) {
+  const map: Record<string, { label: string; color: string }> = {
+    trip_completed: { label: '✓ Pabeigts', color: 'text-green-400' },
+    cancelled:      { label: '✕ Atcelts', color: 'text-red-400' },
+    expired:        { label: '⏱ Beidzies', color: 'text-slate-500' },
+  };
+  const s = map[status] ?? { label: status, color: 'text-slate-400' };
+  return <span className={`text-xs font-medium ${s.color}`}>{s.label}</span>;
 }
 
 function StatusBadge({ status }: { status: string }) {
