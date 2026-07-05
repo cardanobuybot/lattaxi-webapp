@@ -34,13 +34,13 @@ function decodePolyline(encoded: string): [number, number][] {
 }
 
 const pickupIcon = L.divIcon({
-  html: `<div style="width:16px;height:16px;background:#22c55e;border:3px solid white;border-radius:50%;box-shadow:0 2px 6px rgba(0,0,0,.4)"></div>`,
-  iconSize: [16, 16], iconAnchor: [8, 8], className: '',
+  html: `<div style="width:18px;height:18px;background:#16a34a;border:3px solid white;border-radius:50%;box-shadow:0 2px 8px rgba(0,0,0,.5)"></div>`,
+  iconSize: [18, 18], iconAnchor: [9, 9], className: '',
 });
 
 const dropoffIcon = L.divIcon({
-  html: `<div style="width:16px;height:16px;background:#ef4444;border:3px solid white;border-radius:50%;box-shadow:0 2px 6px rgba(0,0,0,.4)"></div>`,
-  iconSize: [16, 16], iconAnchor: [8, 8], className: '',
+  html: `<div style="width:18px;height:18px;background:#dc2626;border:3px solid white;border-radius:50%;box-shadow:0 2px 8px rgba(0,0,0,.5)"></div>`,
+  iconSize: [18, 18], iconAnchor: [9, 9], className: '',
 });
 
 const driverIcon = L.divIcon({
@@ -73,7 +73,7 @@ export default function MapPicker({
       zoomControl: false,
       attributionControl: false,
     });
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
       maxZoom: 19,
     }).addTo(map);
     if (interactive) {
