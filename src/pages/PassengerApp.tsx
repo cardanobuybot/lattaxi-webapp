@@ -1,73 +1,59 @@
 import { useState, useEffect } from 'react';
 import MapPicker from '../components/MapPicker';
-import CategoryCard from '../components/CategoryCard';
 import AddressSearch from '../components/AddressSearch';
 import type { Category, QuoteResult, Ride, RideStatus, RideHistoryItem } from '../api';
 import { getQuote, requestRide, getRideStatus, cancelRide, getCancelPolicy, rateRide, getPassengerHistory } from '../api';
 import { haptic } from '../telegram';
 
 interface LatLng { lat: number; lng: number }
-
-type Step = 'pickup' | 'dropoff' | 'confirm' | 'searching' | 'active' | 'rating' | 'history';
-
+type Step = 'home' | 'confirm' | 'searching' | 'active' | 'rating' | 'history';
 interface Props { userId: number }
 
-const CATEGORY_ORDER: Category[] = ['economy', 'comfort', 'xl'];
+const CATS: { id: Category; label: string; desc: string; icon: string }[] = [
+  { id: 'economy', label: 'Economy',  desc: 'Standarta',    icon: '🚗' },
+  { id: 'comfort', label: 'Comfort',  desc: 'Lielāka klase', icon: '🚙' },
+  { id: 'xl',      label: 'XL',       desc: 'Līdz 6 viet.',  icon: '🚐' },
+];
 
 export default function PassengerApp({ userId }: Props) {
-  const [step, setStep] = useState<Step>('pickup');
-  const [pickup, setPickup] = useState<LatLng & { address: string } | null>(null);
-  const [dropoff, setDropoff] = useState<LatLng & { address: string } | null>(null);
-  const [quote, setQuote] = useState<QuoteResult | null>(null);
-  const [loadingQuote, setLoadingQuote] = useState(false);
-  const [category, setCategory] = useState<Category>('economy');
-  const [ride, setRide] = useState<Ride | null>(null);
-  const [rideStatus, setRideStatus] = useState<RideStatus | null>(null);
-  const [booking, setBooking] = useState(false);
-  const [rating, setRating] = useState(5);
-  const [tip, setTip] = useState(0);
-  const [rated, setRated] = useState(false);
-  const [mapClickMode, setMapClickMode] = useState<'pickup' | 'dropoff'>('pickup');
-  const [history, setHistory] = useState<RideHistoryItem[]>([]);
-  const [historyLoading, setHistoryLoading] = useState(false);
+  const [step, setStep]           = useState<Step>('home');
+  const [pickup,  setPickup]      = useState<(LatLng & { address: string }) | null>(null);
+  const [dropoff, setDropoff]     = useState<(LatLng & { address: string }) | null>(null);
+  const [quote,   setQuote]       = useState<QuoteResult | null>(null);
+  const [loadingQuote, setLoadingQ] = useState(false);
+  const [category, setCategory]   = useState<Category>('economy');
+  const [ride,    setRide]        = useState<Ride | null>(null);
+  const [rideStatus, setRS]       = useState<RideStatus | null>(null);
+  const [booking, setBooking]     = useState(false);
+  const [rating,  setRating]      = useState(5);
+  const [tip,     setTip]         = useState(0);
+  const [rated,   setRated]       = useState(false);
+  const [history, setHistory]     = useState<RideHistoryItem[]>([]);
+  const [histLoading, setHistLoad] = useState(false);
   const [cancelModal, setCancelModal] = useState<{ fee: number; reason: string } | null>(null);
-  const [cancelling, setCancelling] = useState(false);
+  const [cancelling, setCancelling]   = useState(false);
 
-  // Fetch route quote when both points set
   useEffect(() => {
     if (!pickup || !dropoff) return;
-    setLoadingQuote(true);
+    setLoadingQ(true);
     setQuote(null);
     getQuote(pickup, dropoff)
-      .then((r) => { if (r.ok) setQuote(r.quote); })
-      .finally(() => setLoadingQuote(false));
+      .then(r => { if (r.ok) setQuote(r.quote); })
+      .finally(() => setLoadingQ(false));
   }, [pickup?.lat, pickup?.lng, dropoff?.lat, dropoff?.lng]);
 
-  // Poll ride status when active
   useEffect(() => {
     if (!ride || !['searching', 'active'].includes(step)) return;
-    const interval = setInterval(async () => {
+    const iv = setInterval(async () => {
       const s = await getRideStatus(ride.id);
       if (!s.ok) return;
-      setRideStatus(s);
-      if (s.status === 'requested' && step !== 'searching') setStep('searching');
+      setRS(s);
       if (['driver_assigned', 'driver_arrived', 'trip_started'].includes(s.status)) setStep('active');
       if (s.status === 'trip_completed') setStep('rating');
-      if (s.status === 'cancelled') { setStep('pickup'); setRide(null); }
+      if (s.status === 'cancelled') { setStep('home'); setRide(null); }
     }, 5000);
-    return () => clearInterval(interval);
+    return () => clearInterval(iv);
   }, [ride?.id, step]);
-
-  function handleMapClick(pos: LatLng) {
-    if (step !== 'pickup' && step !== 'dropoff') return;
-    haptic('light');
-    if (mapClickMode === 'pickup') {
-      setPickup({ ...pos, address: `${pos.lat.toFixed(4)}, ${pos.lng.toFixed(4)}` });
-      setMapClickMode('dropoff');
-    } else {
-      setDropoff({ ...pos, address: `${pos.lat.toFixed(4)}, ${pos.lng.toFixed(4)}` });
-    }
-  }
 
   async function handleBook() {
     if (!pickup || !dropoff) return;
@@ -75,34 +61,18 @@ export default function PassengerApp({ userId }: Props) {
     haptic('medium');
     const res = await requestRide({
       passenger_user_id: userId,
-      pickup_address: pickup.address,
+      pickup_address:  pickup.address,
       dropoff_address: dropoff.address,
-      pickup_lat: pickup.lat,
-      pickup_lng: pickup.lng,
-      dropoff_lat: dropoff.lat,
-      dropoff_lng: dropoff.lng,
+      pickup_lat:  pickup.lat,  pickup_lng:  pickup.lng,
+      dropoff_lat: dropoff.lat, dropoff_lng: dropoff.lng,
       category,
-      estimated_price: quote?.prices[category],
-      route_distance_meters: quote?.distanceMeters,
+      estimated_price:        quote?.prices[category],
+      route_distance_meters:  quote?.distanceMeters,
       route_duration_seconds: quote?.durationSeconds,
-      route_polyline: quote?.encodedPolyline,
+      route_polyline:         quote?.encodedPolyline,
     });
     setBooking(false);
-    if (res.ok) {
-      setRide(res.ride);
-      setStep('searching');
-    }
-  }
-
-  async function openHistory() {
-    setStep('history');
-    setHistoryLoading(true);
-    try {
-      const r = await getPassengerHistory(userId);
-      if (r.ok) setHistory(r.rides);
-    } finally {
-      setHistoryLoading(false);
-    }
+    if (res.ok) { setRide(res.ride); setStep('searching'); }
   }
 
   async function handleCancel() {
@@ -111,22 +81,11 @@ export default function PassengerApp({ userId }: Props) {
     setCancelling(true);
     try {
       const policy = await getCancelPolicy(ride.id);
-      if (!policy.can_cancel) {
-        haptic('heavy');
-        setCancelling(false);
-        return;
-      }
-      if (policy.fee > 0) {
-        setCancelModal({ fee: policy.fee, reason: policy.reason });
-        setCancelling(false);
-        return;
-      }
+      if (!policy.can_cancel) return;
+      if (policy.fee > 0) { setCancelModal({ fee: policy.fee, reason: policy.reason }); return; }
       await cancelRide(ride.id, userId, false);
-      setRide(null);
-      setStep('pickup');
-    } finally {
-      setCancelling(false);
-    }
+      setRide(null); setStep('home');
+    } finally { setCancelling(false); }
   }
 
   async function confirmCancelWithFee() {
@@ -135,12 +94,8 @@ export default function PassengerApp({ userId }: Props) {
     setCancelling(true);
     try {
       await cancelRide(ride.id, userId, true);
-      setCancelModal(null);
-      setRide(null);
-      setStep('pickup');
-    } finally {
-      setCancelling(false);
-    }
+      setCancelModal(null); setRide(null); setStep('home');
+    } finally { setCancelling(false); }
   }
 
   async function handleRate() {
@@ -150,234 +105,307 @@ export default function PassengerApp({ userId }: Props) {
     setRated(true);
   }
 
-  const durationMin = quote ? Math.round(quote.durationSeconds / 60) : 0;
-  const distanceKm = quote ? (quote.distanceMeters / 1000).toFixed(1) : '—';
+  async function openHistory() {
+    setStep('history');
+    setHistLoad(true);
+    try {
+      const r = await getPassengerHistory(userId);
+      if (r.ok) setHistory(r.rides);
+    } finally { setHistLoad(false); }
+  }
+
+  const durMin  = quote ? Math.round(quote.durationSeconds / 60) : 0;
+  const distKm  = quote ? (quote.distanceMeters / 1000).toFixed(1) : '—';
+  const mapH    = ['confirm', 'searching', 'active'].includes(step) ? '42vh' : '50vh';
+  const showMap = step !== 'history';
 
   return (
-    <div className="flex flex-col h-full relative">
-      {/* Map */}
-      <div className="relative flex-shrink-0">
-        <MapPicker
-          height={step === 'confirm' || step === 'searching' || step === 'active' ? '45vh' : '55vh'}
-          pickupMarker={pickup}
-          dropoffMarker={dropoff}
-          driverMarker={rideStatus?.driver_location ?? null}
-          routePolyline={step === 'confirm' ? quote?.encodedPolyline : null}
-          onMapClick={handleMapClick}
-          interactive={step === 'pickup' || step === 'dropoff'}
-        />
-        {/* Map click hint */}
-        {(step === 'pickup' || step === 'dropoff') && (
-          <div className="absolute bottom-3 left-1/2 -translate-x-1/2 bg-black/70 text-white text-xs px-3 py-1.5 rounded-full pointer-events-none">
-            {mapClickMode === 'pickup' ? '📍 Nospied karti — izvēlies punktu' : '🏁 Nospied karti — izvēlies galamērķi'}
-          </div>
-        )}
-      </div>
+    <div className="flex flex-col h-full bg-[#0f1117] relative">
 
-      {/* Bottom panel */}
-      <div className="flex-1 overflow-y-auto bg-slate-900 rounded-t-2xl -mt-4 relative z-10 px-4 pt-4 pb-safe safe-bottom">
+      {/* ─── MAP ─── */}
+      {showMap && (
+        <div className="relative flex-shrink-0">
+          <MapPicker
+            height={mapH}
+            pickupMarker={pickup}
+            dropoffMarker={dropoff}
+            driverMarker={rideStatus?.driver_location ?? null}
+            routePolyline={step === 'confirm' ? quote?.encodedPolyline ?? null : null}
+            onMapClick={(pos) => {
+              if (step !== 'home') return;
+              haptic('light');
+              if (!pickup) setPickup({ ...pos, address: `${pos.lat.toFixed(4)}, ${pos.lng.toFixed(4)}` });
+              else setDropoff({ ...pos, address: `${pos.lat.toFixed(4)}, ${pos.lng.toFixed(4)}` });
+            }}
+            interactive={step === 'home'}
+          />
+        </div>
+      )}
 
-        {/* ---- PICKUP / DROPOFF ---- */}
-        {(step === 'pickup' || step === 'dropoff') && (
-          <div className="space-y-3">
-            <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider">Maršruts</h2>
-            <AddressSearch
-              icon="🟢"
-              placeholder="Kur jūs atrodaties?"
-              value={pickup?.address ?? ''}
-              onChange={(address, lat, lng) => {
-                setPickup({ lat, lng, address });
-                setMapClickMode('dropoff');
-              }}
-            />
-            <AddressSearch
-              icon="🔴"
-              placeholder="Galamērķis"
-              value={dropoff?.address ?? ''}
-              onChange={(address, lat, lng) => setDropoff({ lat, lng, address })}
-            />
-            {pickup && dropoff && (
+      {/* ─── BOTTOM SHEET ─── */}
+      <div className="flex-1 overflow-y-auto bg-[#1a1d27] rounded-t-3xl -mt-5 relative z-10">
+
+        {/* drag handle */}
+        <div className="flex justify-center pt-3 pb-1">
+          <div className="w-10 h-1 bg-[#ffffff20] rounded-full" />
+        </div>
+
+        {/* ════ HOME ════ */}
+        {step === 'home' && (
+          <div className="px-4 pb-6 space-y-4">
+
+            {/* header row */}
+            <div className="flex items-center justify-between py-1">
+              <span className="text-white font-bold text-lg">Kur braucam?</span>
+              <button onClick={openHistory}
+                className="flex items-center gap-1.5 bg-[#ffffff10] px-3 py-1.5 rounded-full text-xs text-slate-300">
+                <span>🕐</span> Vēsture
+              </button>
+            </div>
+
+            {/* address card */}
+            <div className="bg-[#252836] rounded-2xl overflow-hidden">
+              {/* pickup */}
+              <div className="flex items-center gap-3 px-4 py-3 border-b border-[#ffffff0f]">
+                <div className="flex flex-col items-center gap-0.5">
+                  <div className="w-3 h-3 rounded-full bg-[#4ade80] border-2 border-[#1a1d27]" />
+                  <div className="w-0.5 h-4 bg-[#ffffff20]" />
+                </div>
+                <AddressSearch
+                  placeholder="Izejas punkts"
+                  value={pickup?.address ?? ''}
+                  onChange={(address, lat, lng) => setPickup({ lat, lng, address })}
+                />
+              </div>
+              {/* dropoff */}
+              <div className="flex items-center gap-3 px-4 py-3">
+                <div className="w-3 h-3 rounded-sm bg-[#f87171] border-2 border-[#1a1d27]" />
+                <AddressSearch
+                  placeholder="Galamērķis"
+                  value={dropoff?.address ?? ''}
+                  onChange={(address, lat, lng) => setDropoff({ lat, lng, address })}
+                />
+              </div>
+            </div>
+
+            {/* CTA */}
+            {pickup && dropoff ? (
               <button
                 onClick={() => setStep('confirm')}
-                className="w-full bg-brand text-slate-900 font-bold py-3.5 rounded-xl text-sm active:opacity-80"
+                disabled={loadingQuote}
+                className="w-full bg-[#FFCC00] active:brightness-90 disabled:opacity-60 text-[#0f1117] font-bold py-4 rounded-2xl text-base shadow-lg shadow-yellow-500/20"
               >
-                {loadingQuote ? 'Aprēķina cenu...' : 'Turpināt →'}
+                {loadingQuote ? 'Aprēķina cenu...' : 'Atrast braucēju →'}
               </button>
+            ) : (
+              <div className="bg-[#252836] rounded-2xl px-4 py-3 text-center text-slate-400 text-sm">
+                Ievadi izejas punktu un galamērķi
+              </div>
             )}
-            {/* Tab switcher */}
-            <div className="flex gap-2 pt-1">
-              {(['pickup', 'dropoff'] as const).map(m => (
-                <button
-                  key={m}
-                  onClick={() => setMapClickMode(m)}
-                  className={`flex-1 py-2 rounded-lg text-xs font-medium border ${
-                    mapClickMode === m ? 'border-brand text-brand bg-yellow-400/10' : 'border-slate-700 text-slate-400'
-                  }`}
-                >
-                  {m === 'pickup' ? '📍 Izejas punkts' : '🏁 Galamērķis'}
-                </button>
-              ))}
+          </div>
+        )}
+
+        {/* ════ CONFIRM / CATEGORY ════ */}
+        {step === 'confirm' && (
+          <div className="px-4 pb-6 space-y-4">
+
+            {/* route summary */}
+            <div className="flex items-center justify-between py-1">
+              <button onClick={() => setStep('home')}
+                className="flex items-center gap-1 text-slate-400 text-sm">
+                ← Atpakaļ
+              </button>
+              <span className="text-slate-400 text-sm">{distKm} km · {durMin} min</span>
             </div>
+
+            <p className="text-white font-bold text-lg">Izvēlies braucienu</p>
+
+            {/* categories */}
+            {loadingQuote && (
+              <div className="space-y-3">
+                {[1,2,3].map(i => <div key={i} className="h-20 bg-[#252836] rounded-2xl animate-pulse" />)}
+              </div>
+            )}
+
+            {quote && (
+              <div className="space-y-2">
+                {CATS.map(cat => {
+                  const sel = category === cat.id;
+                  return (
+                    <button
+                      key={cat.id}
+                      type="button"
+                      onClick={() => { setCategory(cat.id); haptic('light'); }}
+                      className={`w-full flex items-center gap-4 px-4 py-4 rounded-2xl border-2 transition-all ${
+                        sel
+                          ? 'bg-[#FFCC00] border-[#FFCC00] text-[#0f1117]'
+                          : 'bg-[#252836] border-transparent text-white active:bg-[#2f3347]'
+                      }`}
+                    >
+                      <span className="text-3xl">{cat.icon}</span>
+                      <div className="flex-1 text-left">
+                        <div className={`font-bold text-base ${sel ? 'text-[#0f1117]' : 'text-white'}`}>{cat.label}</div>
+                        <div className={`text-xs mt-0.5 ${sel ? 'text-[#0f1117]/70' : 'text-slate-400'}`}>{cat.desc}</div>
+                      </div>
+                      <div className="text-right">
+                        <div className={`font-extrabold text-xl ${sel ? 'text-[#0f1117]' : 'text-[#FFCC00]'}`}>
+                          €{quote.prices[cat.id].toFixed(2)}
+                        </div>
+                        <div className={`text-xs ${sel ? 'text-[#0f1117]/60' : 'text-slate-500'}`}>{durMin} min</div>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
             <button
-              onClick={openHistory}
-              className="w-full border border-slate-700 text-slate-400 py-2.5 rounded-xl text-xs font-medium flex items-center justify-center gap-2"
+              onClick={handleBook}
+              disabled={booking || !quote}
+              className="w-full bg-[#FFCC00] active:brightness-90 disabled:opacity-50 text-[#0f1117] font-bold py-4 rounded-2xl text-base shadow-lg shadow-yellow-500/20"
             >
-              🕐 Braucienu vēsture
+              {booking ? 'Rezervē...' : `Pasūtīt ${CATS.find(c => c.id === category)?.label}`}
             </button>
           </div>
         )}
 
-        {/* ---- CONFIRM ---- */}
-        {step === 'confirm' && (
-          <div className="space-y-3">
-            <div className="flex items-center justify-between">
-              <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider">Izvēlies kategoriju</h2>
-              <span className="text-xs text-slate-500">{distanceKm} km · {durationMin} min</span>
-            </div>
-            {loadingQuote && (
-              <div className="text-center text-slate-400 text-sm py-4">Aprēķina cenas...</div>
-            )}
-            {quote && CATEGORY_ORDER.map((cat) => (
-              <CategoryCard
-                key={cat}
-                category={cat}
-                price={quote.prices[cat]}
-                durationMin={durationMin}
-                selected={category === cat}
-                onSelect={() => { setCategory(cat); haptic('light'); }}
-              />
-            ))}
-            <div className="flex gap-2 pt-1">
-              <button
-                onClick={() => setStep('pickup')}
-                className="flex-1 border border-slate-700 text-slate-300 py-3 rounded-xl text-sm"
-              >
-                ← Atpakaļ
-              </button>
-              <button
-                onClick={handleBook}
-                disabled={booking || !quote}
-                className="flex-1 bg-brand text-slate-900 font-bold py-3 rounded-xl text-sm disabled:opacity-50 active:opacity-80"
-              >
-                {booking ? 'Rezervē...' : `Pasūtīt ${category === 'economy' ? 'Economy' : category === 'comfort' ? 'Comfort' : 'XL'}`}
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* ---- SEARCHING ---- */}
+        {/* ════ SEARCHING ════ */}
         {step === 'searching' && (
-          <div className="space-y-4 pt-2">
-            <div className="text-center">
-              <div className="text-3xl mb-2 animate-bounce">🔍</div>
-              <div className="font-semibold text-white">Meklē braucēju...</div>
-              <div className="text-xs text-slate-400 mt-1">Lūdzu, uzgaidiet</div>
+          <div className="px-4 pb-8 space-y-5">
+            <div className="flex flex-col items-center py-4 gap-2">
+              <div className="relative w-16 h-16 flex items-center justify-center">
+                <div className="absolute inset-0 rounded-full border-4 border-[#FFCC00]/30 animate-ping" />
+                <div className="absolute inset-0 rounded-full border-4 border-[#FFCC00]/60 animate-pulse" />
+                <span className="text-3xl relative z-10">🚕</span>
+              </div>
+              <p className="text-white font-bold text-lg mt-2">Meklē braucēju...</p>
+              <p className="text-slate-400 text-sm">Parasti līdz 2 minūtēm</p>
             </div>
-            <div className="bg-slate-800 rounded-xl p-3 space-y-1.5 text-sm">
-              <div className="flex justify-between">
-                <span className="text-slate-400">No:</span>
-                <span className="text-white text-right max-w-48 truncate">{pickup?.address}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-slate-400">Uz:</span>
-                <span className="text-white text-right max-w-48 truncate">{dropoff?.address}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-slate-400">Cena:</span>
-                <span className="text-brand font-semibold">€{ride?.estimated_price}</span>
+
+            <div className="bg-[#252836] rounded-2xl p-4 space-y-3">
+              <RouteRow label="No" value={pickup?.address} />
+              <div className="h-px bg-[#ffffff0a]" />
+              <RouteRow label="Uz" value={dropoff?.address} />
+              <div className="h-px bg-[#ffffff0a]" />
+              <div className="flex justify-between items-center">
+                <span className="text-slate-400 text-sm">Cena</span>
+                <span className="text-[#FFCC00] font-bold text-base">€{ride?.estimated_price}</span>
               </div>
             </div>
-            <button
-              onClick={handleCancel}
-              disabled={cancelling}
-              className="w-full border border-red-500/50 text-red-400 disabled:opacity-50 py-3 rounded-xl text-sm"
-            >
+
+            <button onClick={handleCancel} disabled={cancelling}
+              className="w-full bg-[#252836] active:bg-[#2f3347] disabled:opacity-50 text-red-400 font-semibold py-3.5 rounded-2xl text-sm border border-red-500/20">
               {cancelling ? '...' : 'Atcelt pasūtījumu'}
             </button>
           </div>
         )}
 
-        {/* ---- ACTIVE RIDE ---- */}
+        {/* ════ ACTIVE ════ */}
         {step === 'active' && rideStatus && (
-          <div className="space-y-3">
-            <div className="flex items-center justify-between">
-              <StatusBadge status={rideStatus.status} />
+          <div className="px-4 pb-8 space-y-4">
+
+            {/* status + ETA */}
+            <div className="flex items-center justify-between py-2">
+              <ActiveStatusBadge status={rideStatus.status} />
               {rideStatus.driver_eta_minutes != null && (
-                <span className="text-brand font-bold text-sm">{rideStatus.driver_eta_minutes} min</span>
+                <div className="flex items-center gap-1.5 bg-[#FFCC00]/10 px-3 py-1.5 rounded-full">
+                  <span className="text-[#FFCC00] font-bold text-sm">{rideStatus.driver_eta_minutes} min</span>
+                </div>
               )}
             </div>
+
+            {/* driver card */}
             {rideStatus.driver && (
-              <div className="bg-slate-800 rounded-xl p-3 flex items-center gap-3">
-                <div className="text-3xl">🧑‍✈️</div>
-                <div className="flex-1">
-                  <div className="font-semibold text-sm">{rideStatus.driver.name}</div>
-                  <div className="text-xs text-slate-400">{rideStatus.driver.car} · {rideStatus.driver.car_number}</div>
+              <div className="bg-[#252836] rounded-2xl p-4 flex items-center gap-4">
+                <div className="w-14 h-14 rounded-2xl bg-[#1a1d27] flex items-center justify-center text-3xl flex-shrink-0">
+                  🧑‍✈️
                 </div>
-                <div className="text-right">
-                  <div className="text-yellow-400 text-sm">★ {rideStatus.driver.rating?.toFixed(1)}</div>
-                  <div className="text-xs text-slate-400 capitalize">{rideStatus.driver.category}</div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-white font-bold text-base truncate">{rideStatus.driver.name}</p>
+                  <p className="text-slate-400 text-sm truncate">{rideStatus.driver.car} · {rideStatus.driver.car_number}</p>
+                </div>
+                <div className="flex flex-col items-end gap-1 flex-shrink-0">
+                  <div className="flex items-center gap-1 bg-[#FFCC00]/10 px-2 py-1 rounded-lg">
+                    <span className="text-yellow-400 text-xs">★</span>
+                    <span className="text-white font-bold text-sm">{rideStatus.driver.rating?.toFixed(1)}</span>
+                  </div>
+                  <span className="text-xs text-slate-500 capitalize">{rideStatus.driver.category}</span>
                 </div>
               </div>
             )}
-            <div className="bg-slate-800 rounded-xl p-3 space-y-1.5 text-sm">
+
+            {/* destination */}
+            <div className="bg-[#252836] rounded-2xl p-4 space-y-3">
+              <RouteRow label="Uz" value={dropoff?.address} />
+              <div className="h-px bg-[#ffffff0a]" />
               <div className="flex justify-between">
-                <span className="text-slate-400">Uz:</span>
-                <span className="text-white truncate max-w-48">{dropoff?.address}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-slate-400">Cena:</span>
-                <span className="text-brand font-semibold">���{ride?.estimated_price}</span>
+                <span className="text-slate-400 text-sm">Cena</span>
+                <span className="text-[#FFCC00] font-bold">€{ride?.estimated_price}</span>
               </div>
             </div>
+
             {rideStatus.status !== 'trip_started' && (
-              <button onClick={handleCancel} disabled={cancelling} className="w-full border border-red-500/50 text-red-400 disabled:opacity-50 py-2.5 rounded-xl text-sm">
-                {cancelling ? '...' : 'Atcelt'}
+              <button onClick={handleCancel} disabled={cancelling}
+                className="w-full bg-[#252836] text-red-400 border border-red-500/20 disabled:opacity-50 py-3.5 rounded-2xl text-sm font-semibold">
+                {cancelling ? '...' : 'Atcelt braucienu'}
               </button>
             )}
           </div>
         )}
 
-        {/* ---- RATING ---- */}
+        {/* ════ RATING ════ */}
         {step === 'rating' && (
-          <div className="space-y-4 pt-2">
+          <div className="px-4 pb-8">
             {!rated ? (
-              <>
-                <div className="text-center">
-                  <div className="text-3xl mb-2">🏁</div>
-                  <div className="font-semibold text-white">Brauciens pabeigts!</div>
-                  <div className="text-xs text-slate-400 mt-1">Novērtē braucēju</div>
+              <div className="space-y-5">
+                <div className="flex flex-col items-center py-4 gap-1">
+                  <div className="text-5xl mb-2">🏁</div>
+                  <p className="text-white font-bold text-xl">Brauciens pabeigts!</p>
+                  <p className="text-slate-400 text-sm">Novērtē savu braucēju</p>
                 </div>
-                <div className="flex justify-center gap-2">
+
+                {/* stars */}
+                <div className="flex justify-center gap-3">
                   {[1,2,3,4,5].map(s => (
-                    <button key={s} onClick={() => { setRating(s); haptic('light'); }}
-                      className={`text-3xl transition-transform ${s <= rating ? 'scale-110' : 'opacity-30'}`}>
+                    <button key={s} type="button"
+                      onClick={() => { setRating(s); haptic('light'); }}
+                      className={`text-4xl transition-all ${s <= rating ? 'scale-110' : 'opacity-25 scale-90'}`}>
                       ⭐
                     </button>
                   ))}
                 </div>
+
+                {/* tip */}
                 <div>
-                  <div className="text-xs text-slate-400 mb-2">Dzeramnauда (€)</div>
+                  <p className="text-slate-400 text-sm mb-3 text-center">Dzeramnauда (neobligāti)</p>
                   <div className="flex gap-2">
                     {[0, 1, 2, 5].map(t => (
-                      <button key={t} onClick={() => { setTip(t); haptic('light'); }}
-                        className={`flex-1 py-2 rounded-lg text-sm border font-medium ${
-                          tip === t ? 'border-brand text-brand bg-yellow-400/10' : 'border-slate-700 text-slate-400'
+                      <button key={t} type="button"
+                        onClick={() => { setTip(t); haptic('light'); }}
+                        className={`flex-1 py-3 rounded-2xl text-sm font-bold border-2 transition-all ${
+                          tip === t
+                            ? 'bg-[#FFCC00] border-[#FFCC00] text-[#0f1117]'
+                            : 'bg-[#252836] border-transparent text-slate-300 active:bg-[#2f3347]'
                         }`}>
                         {t === 0 ? 'Nav' : `+€${t}`}
                       </button>
                     ))}
                   </div>
                 </div>
-                <button onClick={handleRate} className="w-full bg-brand text-slate-900 font-bold py-3.5 rounded-xl text-sm">
+
+                <button onClick={handleRate}
+                  className="w-full bg-[#FFCC00] text-[#0f1117] font-bold py-4 rounded-2xl text-base shadow-lg shadow-yellow-500/20">
                   Nosūtīt novērtējumu
                 </button>
-              </>
+              </div>
             ) : (
-              <div className="text-center py-8 space-y-3">
-                <div className="text-4xl">🙏</div>
-                <div className="font-semibold text-white">Paldies!</div>
-                <button onClick={() => { setStep('pickup'); setRide(null); setQuote(null); setPickup(null); setDropoff(null); setRated(false); }}
-                  className="w-full bg-brand text-slate-900 font-bold py-3.5 rounded-xl text-sm mt-4">
+              <div className="flex flex-col items-center py-10 gap-4">
+                <div className="text-6xl">🙏</div>
+                <p className="text-white font-bold text-xl">Paldies!</p>
+                <p className="text-slate-400 text-sm">Tiekamies nākamreiz</p>
+                <button
+                  onClick={() => { setStep('home'); setRide(null); setQuote(null); setPickup(null); setDropoff(null); setRated(false); }}
+                  className="w-full bg-[#FFCC00] text-[#0f1117] font-bold py-4 rounded-2xl text-base mt-4 shadow-lg shadow-yellow-500/20">
                   Jauns brauciens
                 </button>
               </div>
@@ -385,38 +413,57 @@ export default function PassengerApp({ userId }: Props) {
           </div>
         )}
 
-        {/* ---- HISTORY ---- */}
+        {/* ════ HISTORY ════ */}
         {step === 'history' && (
-          <div className="space-y-3">
-            <div className="flex items-center justify-between">
-              <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider">Braucienu vēsture</h2>
-              <button onClick={() => setStep('pickup')} className="text-slate-400 text-xs">✕ Aizvērt</button>
+          <div className="px-4 pb-8 space-y-4">
+            <div className="flex items-center justify-between py-1">
+              <p className="text-white font-bold text-lg">Vēsture</p>
+              <button onClick={() => setStep('home')}
+                className="bg-[#252836] px-3 py-1.5 rounded-full text-slate-400 text-xs">
+                ✕ Aizvērt
+              </button>
             </div>
-            {historyLoading && (
-              <div className="text-center py-8 text-slate-500 text-sm animate-pulse">Ielādē...</div>
+
+            {histLoading && (
+              <div className="space-y-3">
+                {[1,2,3].map(i => <div key={i} className="h-24 bg-[#252836] rounded-2xl animate-pulse" />)}
+              </div>
             )}
-            {!historyLoading && history.length === 0 && (
-              <div className="text-center py-8 text-slate-500 text-sm">Nav braucienu vēstures</div>
+
+            {!histLoading && history.length === 0 && (
+              <div className="flex flex-col items-center py-16 gap-3 text-slate-500">
+                <span className="text-4xl">🗂</span>
+                <span className="text-sm">Nav braucienu vēstures</span>
+              </div>
             )}
+
             {history.map(r => (
-              <div key={r.id} className="bg-slate-800 rounded-xl p-3 space-y-1.5">
+              <div key={r.id} className="bg-[#252836] rounded-2xl p-4 space-y-3">
                 <div className="flex items-center justify-between">
-                  <span className="text-xs text-slate-500">#{r.id} · {new Date(r.created_at).toLocaleDateString('lv-LV')}</span>
-                  <HistoryStatusBadge status={r.status} />
+                  <span className="text-slate-500 text-xs">
+                    {new Date(r.created_at).toLocaleDateString('lv-LV', { day:'numeric', month:'short', year:'numeric' })}
+                  </span>
+                  <HistBadge status={r.status} />
                 </div>
-                <div className="text-xs text-slate-300 truncate">🟢 {r.pickup_address || '—'}</div>
-                <div className="text-xs text-slate-300 truncate">🔴 {r.dropoff_address || '—'}</div>
-                <div className="flex items-center justify-between pt-1">
-                  <div className="text-xs text-slate-500">
-                    {r.driver_name ? `🚗 ${r.driver_name} · ${r.driver_car}` : ''}
+                <div className="space-y-1.5">
+                  <div className="flex items-start gap-2.5">
+                    <div className="w-2 h-2 rounded-full bg-[#4ade80] mt-1.5 flex-shrink-0" />
+                    <span className="text-slate-300 text-sm truncate">{r.pickup_address || '—'}</span>
                   </div>
-                  <div className="text-sm font-bold text-brand">
+                  <div className="flex items-start gap-2.5">
+                    <div className="w-2 h-2 rounded-sm bg-[#f87171] mt-1.5 flex-shrink-0" />
+                    <span className="text-slate-300 text-sm truncate">{r.dropoff_address || '—'}</span>
+                  </div>
+                </div>
+                <div className="flex items-center justify-between pt-1 border-t border-[#ffffff08]">
+                  <span className="text-slate-500 text-xs">
+                    {r.driver_name ? `🚗 ${r.driver_name}` : ''}
+                    {r.passenger_rating != null ? ` · ${'★'.repeat(r.passenger_rating)}` : ''}
+                  </span>
+                  <span className="text-[#FFCC00] font-bold text-base">
                     €{Number(r.final_price ?? r.estimated_price ?? 0).toFixed(2)}
-                  </div>
+                  </span>
                 </div>
-                {r.passenger_rating != null && (
-                  <div className="text-xs text-slate-500">{'⭐'.repeat(r.passenger_rating)} novērtēts</div>
-                )}
               </div>
             ))}
           </div>
@@ -424,31 +471,29 @@ export default function PassengerApp({ userId }: Props) {
 
       </div>
 
-      {/* Cancel fee modal */}
+      {/* ─── CANCEL FEE MODAL ─── */}
       {cancelModal && (
-        <div className="absolute inset-0 z-50 flex items-end justify-center bg-black/60">
-          <div className="w-full bg-slate-900 rounded-t-2xl px-5 pt-5 pb-8 space-y-4">
-            <div className="text-center">
-              <div className="text-3xl mb-2">⚠️</div>
-              <div className="font-bold text-white text-base">Atcelšanas maksa</div>
-              <div className="text-slate-400 text-sm mt-1">{cancelModal.reason}</div>
+        <div className="absolute inset-0 z-50 flex items-end bg-black/70">
+          <div className="w-full bg-[#1a1d27] rounded-t-3xl px-5 pt-6 pb-10 space-y-5">
+            <div className="flex justify-center">
+              <div className="w-10 h-1 bg-[#ffffff20] rounded-full" />
             </div>
-            <div className="bg-slate-800 rounded-xl p-4 text-center">
-              <div className="text-3xl font-bold text-red-400">€{cancelModal.fee.toFixed(2)}</div>
-              <div className="text-xs text-slate-500 mt-1">tiks iekļauts nākamajā rēķinā</div>
+            <div className="flex flex-col items-center gap-2">
+              <span className="text-4xl">⚠️</span>
+              <p className="text-white font-bold text-lg">Atcelšanas maksa</p>
+              <p className="text-slate-400 text-sm text-center">{cancelModal.reason}</p>
+            </div>
+            <div className="bg-[#252836] rounded-2xl p-5 text-center">
+              <p className="text-4xl font-extrabold text-red-400">€{cancelModal.fee.toFixed(2)}</p>
+              <p className="text-slate-500 text-xs mt-1">tiks iekļauts nākamajā rēķinā</p>
             </div>
             <div className="flex gap-3">
-              <button
-                onClick={() => setCancelModal(null)}
-                className="flex-1 border border-slate-600 text-slate-300 py-3.5 rounded-xl text-sm font-medium"
-              >
+              <button onClick={() => setCancelModal(null)}
+                className="flex-1 bg-[#252836] text-slate-300 font-semibold py-4 rounded-2xl text-sm">
                 Atpakaļ
               </button>
-              <button
-                onClick={confirmCancelWithFee}
-                disabled={cancelling}
-                className="flex-1 bg-red-600 disabled:opacity-50 text-white py-3.5 rounded-xl text-sm font-bold"
-              >
+              <button onClick={confirmCancelWithFee} disabled={cancelling}
+                className="flex-1 bg-red-500 active:bg-red-600 disabled:opacity-50 text-white font-bold py-4 rounded-2xl text-sm">
                 {cancelling ? '...' : 'Atcelt braucienu'}
               </button>
             </div>
@@ -459,22 +504,36 @@ export default function PassengerApp({ userId }: Props) {
   );
 }
 
-function HistoryStatusBadge({ status }: { status: string }) {
-  const map: Record<string, { label: string; color: string }> = {
-    trip_completed: { label: '✓ Pabeigts', color: 'text-green-400' },
-    cancelled:      { label: '✕ Atcelts', color: 'text-red-400' },
-    expired:        { label: '⏱ Beidzies', color: 'text-slate-500' },
-  };
-  const s = map[status] ?? { label: status, color: 'text-slate-400' };
-  return <span className={`text-xs font-medium ${s.color}`}>{s.label}</span>;
+function RouteRow({ label, value }: { label: string; value?: string | null }) {
+  return (
+    <div className="flex justify-between items-start gap-3">
+      <span className="text-slate-400 text-sm flex-shrink-0">{label}</span>
+      <span className="text-white text-sm text-right truncate">{value || '—'}</span>
+    </div>
+  );
 }
 
-function StatusBadge({ status }: { status: string }) {
-  const map: Record<string, { label: string; color: string }> = {
-    driver_assigned: { label: 'Braucējs dodas', color: 'bg-blue-500/20 text-blue-300' },
-    driver_arrived:  { label: 'Braucējs ieradies', color: 'bg-green-500/20 text-green-300' },
-    trip_started:    { label: 'Brauciens notiek', color: 'bg-brand/20 text-brand' },
+function ActiveStatusBadge({ status }: { status: string }) {
+  const map: Record<string, { label: string; bg: string; dot: string }> = {
+    driver_assigned: { label: 'Braucējs dodas',    bg: 'bg-blue-500/15',  dot: 'bg-blue-400' },
+    driver_arrived:  { label: 'Braucējs ieradies', bg: 'bg-green-500/15', dot: 'bg-green-400' },
+    trip_started:    { label: 'Brauciens notiek',  bg: 'bg-[#FFCC00]/15', dot: 'bg-[#FFCC00]' },
   };
-  const s = map[status] ?? { label: status, color: 'bg-slate-700 text-slate-300' };
-  return <span className={`text-xs font-semibold px-3 py-1 rounded-full ${s.color}`}>{s.label}</span>;
+  const s = map[status] ?? { label: status, bg: 'bg-[#252836]', dot: 'bg-slate-400' };
+  return (
+    <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full ${s.bg}`}>
+      <div className={`w-2 h-2 rounded-full animate-pulse ${s.dot}`} />
+      <span className="text-white text-sm font-semibold">{s.label}</span>
+    </div>
+  );
+}
+
+function HistBadge({ status }: { status: string }) {
+  const map: Record<string, { label: string; cls: string }> = {
+    trip_completed: { label: '✓ Pabeigts', cls: 'text-green-400 bg-green-500/10' },
+    cancelled:      { label: '✕ Atcelts',  cls: 'text-red-400 bg-red-500/10' },
+    expired:        { label: '⏱ Beidzies', cls: 'text-slate-500 bg-slate-500/10' },
+  };
+  const s = map[status] ?? { label: status, cls: 'text-slate-400 bg-slate-700/30' };
+  return <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${s.cls}`}>{s.label}</span>;
 }

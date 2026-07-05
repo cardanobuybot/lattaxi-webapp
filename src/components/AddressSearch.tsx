@@ -10,7 +10,6 @@ interface Props {
   placeholder: string;
   value: string;
   onChange: (address: string, lat: number, lng: number) => void;
-  icon?: string;
 }
 
 const GMAPS_KEY = import.meta.env.VITE_GOOGLE_MAPS_KEY;
@@ -29,7 +28,6 @@ async function searchGooglePlaces(q: string): Promise<Suggestion[]> {
   );
   const data = await res.json();
   if (!data.predictions) return [];
-
   const details = await Promise.all(
     data.predictions.slice(0, 5).map(async (p: { place_id: string; description: string }) => {
       const r = await fetch(
@@ -46,11 +44,11 @@ async function searchGooglePlaces(q: string): Promise<Suggestion[]> {
   return details.filter(s => s.lat);
 }
 
-export default function AddressSearch({ placeholder, value, onChange, icon = '📍' }: Props) {
-  const [query, setQuery] = useState(value);
+export default function AddressSearch({ placeholder, value, onChange }: Props) {
+  const [query, setQuery]           = useState(value);
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
-  const [open, setOpen] = useState(false);
-  const [loading, setLoading] = useState(false);
+  const [open, setOpen]             = useState(false);
+  const [loading, setLoading]       = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
 
   useEffect(() => { setQuery(value); }, [value]);
@@ -58,13 +56,11 @@ export default function AddressSearch({ placeholder, value, onChange, icon = '�
   function search(q: string) {
     setQuery(q);
     clearTimeout(timer.current);
-    if (q.length < 3) { setSuggestions([]); return; }
+    if (q.length < 3) { setSuggestions([]); setOpen(false); return; }
     timer.current = setTimeout(async () => {
       setLoading(true);
       try {
-        const results = GMAPS_KEY
-          ? await searchGooglePlaces(q)
-          : await searchNominatim(q);
+        const results = GMAPS_KEY ? await searchGooglePlaces(q) : await searchNominatim(q);
         setSuggestions(results);
         setOpen(true);
       } catch { /* ignore */ } finally {
@@ -74,9 +70,7 @@ export default function AddressSearch({ placeholder, value, onChange, icon = '�
   }
 
   function pick(s: Suggestion) {
-    const short = GMAPS_KEY
-      ? s.display_name.split(',').slice(0, 2).join(',').trim()
-      : s.display_name.split(',').slice(0, 2).join(',').trim();
+    const short = s.display_name.split(',').slice(0, 2).join(',').trim();
     setQuery(short);
     setSuggestions([]);
     setOpen(false);
@@ -84,30 +78,37 @@ export default function AddressSearch({ placeholder, value, onChange, icon = '�
   }
 
   return (
-    <div className="relative">
-      <div className="flex items-center gap-2 bg-slate-800 border border-slate-700 rounded-xl px-3 py-2.5">
-        <span className="text-base">{icon}</span>
+    <div className="flex-1 relative">
+      <div className="flex items-center gap-2">
         <input
-          className="flex-1 bg-transparent text-sm text-white placeholder-slate-400 outline-none"
+          className="flex-1 bg-transparent text-sm text-white placeholder-slate-500 outline-none py-0.5"
           placeholder={placeholder}
           value={query}
-          onChange={(e) => search(e.target.value)}
+          onChange={e => search(e.target.value)}
           onFocus={() => suggestions.length > 0 && setOpen(true)}
         />
-        {loading && <span className="text-slate-500 text-xs animate-pulse">...</span>}
+        {loading && <span className="text-slate-600 text-xs animate-pulse">●●●</span>}
         {!loading && query && (
-          <button onClick={() => { setQuery(''); setSuggestions([]); }} className="text-slate-500 text-xs">✕</button>
+          <button
+            type="button"
+            onClick={() => { setQuery(''); setSuggestions([]); setOpen(false); }}
+            className="text-slate-600 text-sm w-5 h-5 flex items-center justify-center rounded-full hover:bg-[#ffffff10]"
+          >
+            ✕
+          </button>
         )}
       </div>
       {open && suggestions.length > 0 && (
-        <ul className="absolute z-50 w-full mt-1 bg-slate-800 border border-slate-700 rounded-xl overflow-hidden shadow-xl">
+        <ul className="absolute left-0 right-0 top-full mt-1 z-50 bg-[#1e2130] border border-[#ffffff12] rounded-2xl overflow-hidden shadow-2xl">
           {suggestions.map((s, i) => (
-            <li key={i}>
+            <li key={i} className="border-b border-[#ffffff08] last:border-0">
               <button
-                className="w-full text-left px-4 py-2.5 text-sm text-slate-200 hover:bg-slate-700 border-b border-slate-700 last:border-0"
+                type="button"
+                className="w-full text-left px-4 py-3 text-sm text-slate-200 active:bg-[#252836] flex items-start gap-3"
                 onClick={() => pick(s)}
               >
-                {s.display_name.split(',').slice(0, 3).join(', ')}
+                <span className="text-slate-500 mt-0.5 flex-shrink-0">📍</span>
+                <span className="truncate">{s.display_name.split(',').slice(0, 3).join(', ')}</span>
               </button>
             </li>
           ))}
