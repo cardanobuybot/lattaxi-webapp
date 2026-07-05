@@ -14,12 +14,30 @@ interface Props {
 
 const GMAPS_KEY = import.meta.env.VITE_GOOGLE_MAPS_KEY;
 
-async function searchNominatim(q: string): Promise<Suggestion[]> {
+async function searchPhoton(q: string): Promise<Suggestion[]> {
   const res = await fetch(
-    `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q + ', Rīga')}&format=json&limit=5&countrycodes=lv`,
+    `https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&limit=7&lang=lv&lat=56.946&lon=24.105&zoom=14&bbox=23.7,56.8,24.4,57.1`,
     { headers: { 'Accept-Language': 'lv' } }
   );
-  return res.json();
+  const data = await res.json();
+  if (!data.features) return [];
+  return data.features
+    .filter((f: { properties: { country?: string } }) => f.properties.country === 'Latvia' || f.properties.country === 'Latvija')
+    .map((f: { geometry: { coordinates: [number, number] }; properties: { name?: string; street?: string; housenumber?: string; city?: string; postcode?: string } }) => {
+      const p = f.properties;
+      const parts: string[] = [];
+      if (p.street && p.housenumber) parts.push(`${p.street} ${p.housenumber}`);
+      else if (p.street) parts.push(p.street);
+      else if (p.name) parts.push(p.name);
+      if (p.city && p.city !== parts[0]) parts.push(p.city);
+      if (p.postcode) parts.push(p.postcode);
+      return {
+        display_name: parts.join(', ') || p.name || '',
+        lat: String(f.geometry.coordinates[1]),
+        lon: String(f.geometry.coordinates[0]),
+      };
+    })
+    .filter((s: Suggestion) => s.display_name);
 }
 
 async function searchGooglePlaces(q: string): Promise<Suggestion[]> {
@@ -56,11 +74,11 @@ export default function AddressSearch({ placeholder, value, onChange }: Props) {
   function search(q: string) {
     setQuery(q);
     clearTimeout(timer.current);
-    if (q.length < 3) { setSuggestions([]); setOpen(false); return; }
+    if (q.length < 2) { setSuggestions([]); setOpen(false); return; }
     timer.current = setTimeout(async () => {
       setLoading(true);
       try {
-        const results = GMAPS_KEY ? await searchGooglePlaces(q) : await searchNominatim(q);
+        const results = GMAPS_KEY ? await searchGooglePlaces(q) : await searchPhoton(q);
         setSuggestions(results);
         setOpen(true);
       } catch { /* ignore */ } finally {
