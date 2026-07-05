@@ -3,7 +3,7 @@ import MapPicker from '../components/MapPicker';
 import CategoryCard from '../components/CategoryCard';
 import AddressSearch from '../components/AddressSearch';
 import type { Category, QuoteResult, Ride, RideStatus, RideHistoryItem } from '../api';
-import { getQuote, requestRide, getRideStatus, cancelRide, rateRide, getPassengerHistory } from '../api';
+import { getQuote, requestRide, getRideStatus, cancelRide, getCancelPolicy, rateRide, getPassengerHistory } from '../api';
 import { haptic } from '../telegram';
 
 interface LatLng { lat: number; lng: number }
@@ -30,6 +30,8 @@ export default function PassengerApp({ userId }: Props) {
   const [mapClickMode, setMapClickMode] = useState<'pickup' | 'dropoff'>('pickup');
   const [history, setHistory] = useState<RideHistoryItem[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [cancelModal, setCancelModal] = useState<{ fee: number; reason: string } | null>(null);
+  const [cancelling, setCancelling] = useState(false);
 
   // Fetch route quote when both points set
   useEffect(() => {
@@ -105,10 +107,40 @@ export default function PassengerApp({ userId }: Props) {
 
   async function handleCancel() {
     if (!ride) return;
+    haptic('medium');
+    setCancelling(true);
+    try {
+      const policy = await getCancelPolicy(ride.id);
+      if (!policy.can_cancel) {
+        haptic('heavy');
+        setCancelling(false);
+        return;
+      }
+      if (policy.fee > 0) {
+        setCancelModal({ fee: policy.fee, reason: policy.reason });
+        setCancelling(false);
+        return;
+      }
+      await cancelRide(ride.id, userId, false);
+      setRide(null);
+      setStep('pickup');
+    } finally {
+      setCancelling(false);
+    }
+  }
+
+  async function confirmCancelWithFee() {
+    if (!ride || !cancelModal) return;
     haptic('heavy');
-    await cancelRide(ride.id, userId);
-    setRide(null);
-    setStep('pickup');
+    setCancelling(true);
+    try {
+      await cancelRide(ride.id, userId, true);
+      setCancelModal(null);
+      setRide(null);
+      setStep('pickup');
+    } finally {
+      setCancelling(false);
+    }
   }
 
   async function handleRate() {
@@ -122,7 +154,7 @@ export default function PassengerApp({ userId }: Props) {
   const distanceKm = quote ? (quote.distanceMeters / 1000).toFixed(1) : '—';
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col h-full relative">
       {/* Map */}
       <div className="relative flex-shrink-0">
         <MapPicker
@@ -257,9 +289,10 @@ export default function PassengerApp({ userId }: Props) {
             </div>
             <button
               onClick={handleCancel}
-              className="w-full border border-red-500/50 text-red-400 py-3 rounded-xl text-sm"
+              disabled={cancelling}
+              className="w-full border border-red-500/50 text-red-400 disabled:opacity-50 py-3 rounded-xl text-sm"
             >
-              Atcelt pasūtījumu
+              {cancelling ? '...' : 'Atcelt pasūtījumu'}
             </button>
           </div>
         )}
@@ -297,8 +330,8 @@ export default function PassengerApp({ userId }: Props) {
               </div>
             </div>
             {rideStatus.status !== 'trip_started' && (
-              <button onClick={handleCancel} className="w-full border border-red-500/50 text-red-400 py-2.5 rounded-xl text-sm">
-                Atcelt
+              <button onClick={handleCancel} disabled={cancelling} className="w-full border border-red-500/50 text-red-400 disabled:opacity-50 py-2.5 rounded-xl text-sm">
+                {cancelling ? '...' : 'Atcelt'}
               </button>
             )}
           </div>
@@ -390,6 +423,38 @@ export default function PassengerApp({ userId }: Props) {
         )}
 
       </div>
+
+      {/* Cancel fee modal */}
+      {cancelModal && (
+        <div className="absolute inset-0 z-50 flex items-end justify-center bg-black/60">
+          <div className="w-full bg-slate-900 rounded-t-2xl px-5 pt-5 pb-8 space-y-4">
+            <div className="text-center">
+              <div className="text-3xl mb-2">⚠️</div>
+              <div className="font-bold text-white text-base">Atcelšanas maksa</div>
+              <div className="text-slate-400 text-sm mt-1">{cancelModal.reason}</div>
+            </div>
+            <div className="bg-slate-800 rounded-xl p-4 text-center">
+              <div className="text-3xl font-bold text-red-400">€{cancelModal.fee.toFixed(2)}</div>
+              <div className="text-xs text-slate-500 mt-1">tiks iekļauts nākamajā rēķinā</div>
+            </div>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setCancelModal(null)}
+                className="flex-1 border border-slate-600 text-slate-300 py-3.5 rounded-xl text-sm font-medium"
+              >
+                Atpakaļ
+              </button>
+              <button
+                onClick={confirmCancelWithFee}
+                disabled={cancelling}
+                className="flex-1 bg-red-600 disabled:opacity-50 text-white py-3.5 rounded-xl text-sm font-bold"
+              >
+                {cancelling ? '...' : 'Atcelt braucienu'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

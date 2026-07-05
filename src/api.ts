@@ -95,8 +95,17 @@ export async function getRideStatus(rideId: number): Promise<{ ok: boolean } & R
   return get(`/rides/${rideId}/status`);
 }
 
-export async function cancelRide(rideId: number, userId: number) {
-  return post('/rides/cancel', { ride_id: rideId, user_id: userId });
+export async function getCancelPolicy(rideId: number): Promise<{
+  ok: boolean; can_cancel: boolean; fee: number; reason: string; free_seconds_left?: number;
+}> {
+  return get(`/rides/cancel-policy?ride_id=${rideId}`);
+}
+
+export async function cancelRide(rideId: number, userId: number, acceptFee = false) {
+  return post<{ ok: boolean; fee_charged?: number; error?: string }>(
+    '/rides/cancel',
+    { ride_id: rideId, user_id: userId, accept_fee: acceptFee }
+  );
 }
 
 export async function rateRide(params: {
