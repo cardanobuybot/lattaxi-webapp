@@ -22,7 +22,6 @@ async function searchPhoton(q: string): Promise<Suggestion[]> {
   const data = await res.json();
   if (!data.features) return [];
   return data.features
-    .filter((f: { properties: { country?: string } }) => f.properties.country === 'Latvia' || f.properties.country === 'Latvija')
     .map((f: { geometry: { coordinates: [number, number] }; properties: { name?: string; street?: string; housenumber?: string; city?: string; postcode?: string } }) => {
       const p = f.properties;
       const parts: string[] = [];

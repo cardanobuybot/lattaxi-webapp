@@ -136,19 +136,18 @@ export default function PassengerApp({ userId }: Props) {
     } finally { setHistLoad(false); }
   }
 
-  const durMin  = quote ? Math.round(quote.durationSeconds / 60) : 0;
-  const distKm  = quote ? (quote.distanceMeters / 1000).toFixed(1) : '—';
-  const mapH    = ['confirm', 'searching', 'active'].includes(step) ? '42vh' : '50vh';
+  const durMin = quote ? Math.round(quote.durationSeconds / 60) : 0;
+  const distKm = quote ? (quote.distanceMeters / 1000).toFixed(1) : '—';
   const showMap = step !== 'history';
 
   return (
-    <div className="flex flex-col h-full bg-[#0f1117] relative">
+    <div className="relative h-full bg-[#0f1117] overflow-hidden">
 
-      {/* ─── MAP ─── */}
+      {/* ─── MAP (full screen) ─── */}
       {showMap && (
-        <div className="relative flex-shrink-0">
+        <div className="absolute inset-0">
           <MapPicker
-            height={mapH}
+            height="100%"
             pickupMarker={pickup}
             dropoffMarker={dropoff}
             driverMarker={rideStatus?.driver_location ?? null}
@@ -165,8 +164,8 @@ export default function PassengerApp({ userId }: Props) {
         </div>
       )}
 
-      {/* ─── BOTTOM SHEET ─── */}
-      <div className="flex-1 overflow-y-auto bg-[#1a1d27] rounded-t-3xl -mt-5 relative z-10">
+      {/* ─── BOTTOM SHEET (overlays map) ─── */}
+      <div className={`absolute bottom-0 left-0 right-0 z-10 bg-[#1a1d27] rounded-t-3xl overflow-y-auto ${step === 'history' ? 'top-0 rounded-t-none' : 'max-h-[72vh]'}`}>
 
         {/* drag handle */}
         <div className="flex justify-center pt-3 pb-1">
