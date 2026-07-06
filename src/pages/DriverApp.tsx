@@ -7,7 +7,7 @@ import { haptic } from '../telegram';
 const API = import.meta.env.VITE_API_URL ?? 'https://api.lattaxi.lv';
 
 interface Props { telegramId: number; userName: string }
-type DriverStep = 'register' | 'dashboard' | 'offer' | 'active' | 'history' | 'earnings';
+type DriverStep = 'register' | 'dashboard' | 'offer' | 'active' | 'history' | 'earnings' | 'pending' | 'rejected';
 
 interface OfferData {
   rideId: number; offerId: number;
@@ -67,6 +67,8 @@ export default function DriverApp({ telegramId, userName }: Props) {
   const [histLoading, setHistLoad]      = useState(false);
   const [earnings, setEarnings]         = useState<{ today: string; week: string; month: string; rides_today: number; rides_week: number; tips_today: string } | null>(null);
   const [earningsLoading, setEarningsLoad] = useState(false);
+  const [licenseNumber, setLicenseNumber] = useState('');
+  const [rejectionReason, setRejectionReason] = useState('');
 
   useEffect(() => {
     if (online && navigator.geolocation) {
@@ -113,11 +115,32 @@ export default function DriverApp({ telegramId, userName }: Props) {
     return () => clearInterval(iv);
   }, [activeRideId, step]);
 
+  useEffect(() => {
+    async function checkRegistration() {
+      const res = await fetch(`${API}/drivers/me?telegram_id=${telegramId}`).then(r => r.json()).catch(() => null);
+      if (!res || !res.ok) return; // not registered, stay on register
+      if (res.driver.verification_status === 'approved') setStep('dashboard');
+      else if (res.driver.verification_status === 'rejected') { setRejectionReason(res.driver.rejection_reason || ''); setStep('rejected'); }
+      else setStep('pending');
+      // also update car/category from server
+      setCar(res.driver.car || '');
+      setCarNumber(res.driver.car_number || '');
+      setCategory(res.driver.category || 'economy');
+    }
+    checkRegistration();
+  }, []); // run once on mount
+
   async function handleRegister() {
     if (!car || !carNumber) return;
     haptic('medium');
-    const res = await registerDriver({ telegram_id: telegramId, name: userName, car, car_number: carNumber, category }) as { ok: boolean };
-    if (res.ok) setStep('dashboard');
+    const res = await registerDriver({ telegram_id: telegramId, name: userName, car, car_number: carNumber, category, license_number: licenseNumber }) as { ok: boolean };
+    if (res.ok) {
+      // check verification status
+      const me = await fetch(`${API}/drivers/me?telegram_id=${telegramId}`).then(r => r.json());
+      if (me.ok && me.driver.verification_status === 'approved') setStep('dashboard');
+      else if (me.ok && me.driver.verification_status === 'rejected') { setRejectionReason(me.driver.rejection_reason || ''); setStep('rejected'); }
+      else setStep('pending');
+    }
   }
 
   async function toggleOnline() {
@@ -195,6 +218,14 @@ export default function DriverApp({ telegramId, userName }: Props) {
                 onChange={e => setCarNumber(e.target.value.toUpperCase())}
               />
             </div>
+            <div className="bg-[#1a1d27] rounded-2xl px-4 py-1">
+              <input
+                className="w-full bg-transparent text-white placeholder-slate-500 py-3.5 text-sm outline-none"
+                placeholder="Vadītāja apliecības numurs (nav obligāti)"
+                value={licenseNumber}
+                onChange={e => setLicenseNumber(e.target.value)}
+              />
+            </div>
 
             <div>
               <p className="text-slate-500 text-xs mb-2 px-1">Kategorija</p>
@@ -220,7 +251,34 @@ export default function DriverApp({ telegramId, userName }: Props) {
         </div>
       )}
 
-      {/* ═���══ DASHBOARD ════ */}
+      {/* ════ PENDING ════ */}
+      {step === 'pending' && (
+        <div className="flex-1 flex flex-col items-center justify-center px-5 pb-8 text-center">
+          <div className="w-20 h-20 rounded-3xl bg-yellow-400/10 flex items-center justify-center text-4xl mb-6">⏳</div>
+          <h2 className="text-white font-bold text-xl mb-2">Gaida verifikāciju</h2>
+          <p className="text-slate-400 text-sm mb-8">Jūsu pieteikums tiek izskatīts. Parasti tas aizņem līdz 24 stundām.</p>
+          <div className="bg-[#1a1d27] rounded-2xl p-4 w-full text-left space-y-2">
+            <div className="flex justify-between"><span className="text-slate-500 text-sm">Vārds</span><span className="text-white text-sm">{userName}</span></div>
+            <div className="flex justify-between"><span className="text-slate-500 text-sm">Auto</span><span className="text-white text-sm">{car}</span></div>
+            <div className="flex justify-between"><span className="text-slate-500 text-sm">Numurs</span><span className="text-white text-sm">{carNumber}</span></div>
+          </div>
+        </div>
+      )}
+
+      {/* ════ REJECTED ════ */}
+      {step === 'rejected' && (
+        <div className="flex-1 flex flex-col items-center justify-center px-5 pb-8 text-center">
+          <div className="w-20 h-20 rounded-3xl bg-red-500/10 flex items-center justify-center text-4xl mb-6">❌</div>
+          <h2 className="text-white font-bold text-xl mb-2">Pieteikums noraidīts</h2>
+          {rejectionReason && <p className="text-red-400 text-sm mb-4 bg-red-500/10 rounded-xl px-4 py-3">{rejectionReason}</p>}
+          <p className="text-slate-400 text-sm mb-8">Sazinieties ar atbalstu @LatTaxiSupportBot</p>
+          <button onClick={() => setStep('register')} className="w-full bg-[#252836] text-slate-300 font-semibold py-4 rounded-2xl text-sm">
+            Mēģināt vēlreiz
+          </button>
+        </div>
+      )}
+
+      {/* ════ DASHBOARD ════ */}
       {step === 'dashboard' && (
         <div className="flex-1 flex flex-col">
           <div className="relative">

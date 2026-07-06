@@ -124,6 +124,7 @@ export async function registerDriver(params: {
   car: string;
   car_number: string;
   category?: Category;
+  license_number?: string;
 }) {
   return post('/drivers/register', params);
 }

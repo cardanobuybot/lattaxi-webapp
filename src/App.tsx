@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import './index.css';
 import PassengerApp from './pages/PassengerApp';
 import DriverApp from './pages/DriverApp';
+import AdminPanel from './pages/AdminPanel';
 import { tg, getTelegramUser } from './telegram';
 import { registerUser } from './api';
 
@@ -68,7 +69,17 @@ function ErrorScreen() {
   );
 }
 
-export default function App() {
+function AdminApp() {
+  return (
+    <BrowserRouter>
+      <Routes>
+        <Route path="/admin" element={<AdminPanel />} />
+      </Routes>
+    </BrowserRouter>
+  );
+}
+
+function MainApp() {
   const { mode, userId, telegramId, userName } = useAppInit();
 
   if (mode === 'loading') return <LoadingScreen />;
@@ -83,4 +94,11 @@ export default function App() {
       </Routes>
     </BrowserRouter>
   );
+}
+
+export default function App() {
+  if (window.location.pathname.startsWith('/admin')) {
+    return <AdminApp />;
+  }
+  return <MainApp />;
 }
