@@ -34,11 +34,15 @@ async function updateDriverLocation(telegramId: number, lat: number, lng: number
   } catch { /* ignore */ }
 }
 
-async function updateRideStatus(rideId: number, status: string, telegramId: number) {
+async function updateRideStatus(rideId: number, status: string, telegramId: number, pos?: { lat: number; lng: number }) {
   await fetch(`${API}/rides/${rideId}/update-status`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ status, driver_telegram_id: telegramId }),
+    body: JSON.stringify({
+      status,
+      driver_telegram_id: telegramId,
+      ...(pos ? { actual_lat: pos.lat, actual_lng: pos.lng } : {}),
+    }),
   });
 }
 
@@ -185,7 +189,8 @@ export default function DriverApp({ telegramId, userName }: Props) {
   async function handleStatusUpdate(newStatus: string) {
     if (!activeRideId) return;
     haptic('medium');
-    await updateRideStatus(activeRideId, newStatus, telegramId);
+    const pos = newStatus === 'trip_completed' && driverPos ? driverPos : undefined;
+    await updateRideStatus(activeRideId, newStatus, telegramId, pos);
     setRideStatus(newStatus);
   }
 
