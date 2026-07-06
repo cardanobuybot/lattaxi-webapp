@@ -53,6 +53,7 @@ export default function PassengerApp({ userId }: Props) {
   const [cancelModal, setCancelModal] = useState<{ fee: number; reason: string } | null>(null);
   const [cancelling, setCancelling]   = useState(false);
   const [comment, setComment]         = useState('');
+  const [freeSecsLeft, setFreeSecsLeft] = useState<number | null>(null);
 
   useEffect(() => {
     if (!pickup || !dropoff) return;
@@ -62,6 +63,15 @@ export default function PassengerApp({ userId }: Props) {
       .then(r => { if (r.ok) setQuote(r.quote); })
       .finally(() => setLoadingQ(false));
   }, [pickup?.lat, pickup?.lng, dropoff?.lat, dropoff?.lng]);
+
+  useEffect(() => {
+    if (!ride || rideStatus?.status !== 'driver_assigned') { setFreeSecsLeft(null); return; }
+    const iv = setInterval(async () => {
+      const p = await getCancelPolicy(ride.id);
+      setFreeSecsLeft(p.free_seconds_left ?? null);
+    }, 1000);
+    return () => clearInterval(iv);
+  }, [ride?.id, rideStatus?.status]);
 
   useEffect(() => {
     if (!ride || !['searching', 'active'].includes(step)) return;
@@ -379,10 +389,24 @@ export default function PassengerApp({ userId }: Props) {
             </div>
 
             {rideStatus.status !== 'trip_started' && (
-              <button onClick={handleCancel} disabled={cancelling}
-                className="w-full bg-[#252836] text-red-400 border border-red-500/20 disabled:opacity-50 py-3.5 rounded-2xl text-sm font-semibold">
-                {cancelling ? '...' : 'Atcelt braucienu'}
-              </button>
+              <div className="space-y-2">
+                {freeSecsLeft != null && freeSecsLeft > 0 && (
+                  <div className="flex items-center justify-center gap-2 bg-green-500/10 rounded-xl px-4 py-2">
+                    <span className="text-green-400 text-xs font-semibold">
+                      ✓ Bezmaksas atcelšana vēl: {Math.floor(freeSecsLeft / 60)}:{String(freeSecsLeft % 60).padStart(2, '0')}
+                    </span>
+                  </div>
+                )}
+                {freeSecsLeft === 0 && (
+                  <div className="flex items-center justify-center gap-2 bg-red-500/10 rounded-xl px-4 py-2">
+                    <span className="text-red-400 text-xs font-semibold">⚠️ Atcelšana: €2.00 maksa</span>
+                  </div>
+                )}
+                <button onClick={handleCancel} disabled={cancelling}
+                  className="w-full bg-[#252836] text-red-400 border border-red-500/20 disabled:opacity-50 py-3.5 rounded-2xl text-sm font-semibold">
+                  {cancelling ? '...' : 'Atcelt braucienu'}
+                </button>
+              </div>
             )}
           </div>
         )}
@@ -519,7 +543,7 @@ export default function PassengerApp({ userId }: Props) {
             </div>
             <div className="bg-[#252836] rounded-2xl p-5 text-center">
               <p className="text-4xl font-extrabold text-red-400">€{cancelModal.fee.toFixed(2)}</p>
-              <p className="text-slate-500 text-xs mt-1">tiks iekļauts nākamajā rēķinā</p>
+              <p className="text-slate-500 text-xs mt-1">maksa tiek iekasēta par vadītāja laiku</p>
             </div>
             <div className="flex gap-3">
               <button onClick={() => setCancelModal(null)}
