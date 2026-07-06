@@ -169,3 +169,14 @@ export async function getDriverHistory(telegramId: number, offset = 0) {
     `/rides/history/driver?telegram_id=${telegramId}&offset=${offset}`
   );
 }
+
+export async function reportNoShow(rideId: number, driverTelegramId: number) {
+  return post<{ ok: boolean; fee_charged?: number; driver_payout?: number; error?: string; seconds_left?: number }>(
+    `/rides/${rideId}/no-show`,
+    { driver_telegram_id: driverTelegramId }
+  );
+}
+
+export async function getWaitFeeStatus(rideId: number): Promise<{ wait_minutes: number; wait_fee: number; free_minutes_left: number }> {
+  return get(`/rides/${rideId}/wait-status`);
+}

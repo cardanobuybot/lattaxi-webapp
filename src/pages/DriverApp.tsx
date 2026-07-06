@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import MapPicker from '../components/MapPicker';
 import type { Category, RideHistoryItem } from '../api';
-import { registerDriver, setDriverStatus, getRideStatus, getDriverHistory, getDriverEarnings } from '../api';
+import { registerDriver, setDriverStatus, getRideStatus, getDriverHistory, getDriverEarnings, reportNoShow } from '../api';
 import { haptic } from '../telegram';
 
 const API = import.meta.env.VITE_API_URL ?? 'https://api.lattaxi.lv';
@@ -71,6 +71,8 @@ export default function DriverApp({ telegramId, userName }: Props) {
   const [histLoading, setHistLoad]      = useState(false);
   const [earnings, setEarnings]         = useState<{ today: string; week: string; month: string; rides_today: number; rides_week: number; tips_today: string } | null>(null);
   const [earningsLoading, setEarningsLoad] = useState(false);
+  const [noShowSecsLeft, setNoShowSecsLeft] = useState<number | null>(null);
+  const [noShowLoading, setNoShowLoading] = useState(false);
   const [licenseNumber, setLicenseNumber] = useState('');
   const [rejectionReason, setRejectionReason] = useState('');
 
@@ -118,6 +120,19 @@ export default function DriverApp({ telegramId, userName }: Props) {
     }, 5000);
     return () => clearInterval(iv);
   }, [activeRideId, step]);
+
+  useEffect(() => {
+    if (rideStatus !== 'driver_arrived' || !activeRideId) { setNoShowSecsLeft(null); return; }
+    setNoShowSecsLeft(5 * 60);
+    const iv = setInterval(() => {
+      setNoShowSecsLeft(prev => {
+        if (prev === null) return 5 * 60;
+        if (prev <= 0) return 0;
+        return prev - 1;
+      });
+    }, 1000);
+    return () => clearInterval(iv);
+  }, [rideStatus, activeRideId]);
 
   useEffect(() => {
     async function checkRegistration() {
@@ -192,6 +207,24 @@ export default function DriverApp({ telegramId, userName }: Props) {
     const pos = newStatus === 'trip_completed' && driverPos ? driverPos : undefined;
     await updateRideStatus(activeRideId, newStatus, telegramId, pos);
     setRideStatus(newStatus);
+  }
+
+  async function handleNoShow() {
+    if (!activeRideId) return;
+    haptic('heavy');
+    setNoShowLoading(true);
+    try {
+      const res = await reportNoShow(activeRideId, telegramId);
+      if (res.ok) {
+        setStep('dashboard');
+        setActiveRideId(null);
+        setRideStatus('');
+        setActivePickup(null);
+        setActiveDropoff(null);
+      }
+    } finally {
+      setNoShowLoading(false);
+    }
   }
 
   return (
@@ -505,6 +538,31 @@ export default function DriverApp({ telegramId, userName }: Props) {
                 className="flex items-center justify-center gap-2 w-full bg-blue-500/15 border border-blue-500/30 text-blue-300 font-semibold py-3 rounded-2xl text-sm mb-2">
                 🗺 Navigēt uz galamērķi
               </a>
+            )}
+
+            {/* No-show button — appears after 5 min wait */}
+            {rideStatus === 'driver_arrived' && noShowSecsLeft !== null && (
+              <div className={`rounded-2xl p-3 mb-2 ${noShowSecsLeft > 0 ? 'bg-[#252836]' : 'bg-red-500/15 border border-red-500/30'}`}>
+                {noShowSecsLeft > 0 ? (
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-400 text-sm">Pasažieris neieradās?</span>
+                    <span className="text-[#FFCC00] font-bold text-sm">
+                      {Math.floor(noShowSecsLeft / 60)}:{String(noShowSecsLeft % 60).padStart(2, '0')}
+                    </span>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    <p className="text-red-400 text-sm font-semibold text-center">Pasažieris neieradās 5 min laikā</p>
+                    <button
+                      onClick={handleNoShow}
+                      disabled={noShowLoading}
+                      className="w-full bg-red-500 active:bg-red-600 disabled:opacity-50 text-white font-bold py-3 rounded-xl text-sm"
+                    >
+                      {noShowLoading ? '...' : '❌ Pasažieris neieradās — atcelt'}
+                    </button>
+                  </div>
+                )}
+              </div>
             )}
 
             {/* action buttons */}

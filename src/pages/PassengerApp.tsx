@@ -388,6 +388,16 @@ export default function PassengerApp({ userId }: Props) {
               </div>
             </div>
 
+            {rideStatus.status === 'driver_arrived' && (
+              <div className="bg-yellow-500/10 border border-yellow-500/20 rounded-2xl p-3 flex items-start gap-2">
+                <span className="text-yellow-400 text-sm">⏱</span>
+                <p className="text-yellow-300 text-xs leading-relaxed">
+                  Vadītājs gaida. Pirmās 3 minūtes ir bezmaksas.<br/>
+                  Pēc tam: €0.15/min gaidīšanas maksa.
+                </p>
+              </div>
+            )}
+
             {rideStatus.status !== 'trip_started' && (
               <div className="space-y-2">
                 {freeSecsLeft != null && freeSecsLeft > 0 && (
