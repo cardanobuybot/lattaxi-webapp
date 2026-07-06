@@ -260,6 +260,12 @@ export default function DriverApp({ telegramId, userName }: Props) {
   return (
     <div className="flex flex-col h-full bg-[#0f1117]">
 
+      {notice && (
+        <div className="fixed top-4 left-4 right-4 z-[1000] bg-[#1a1d27] border border-[#FFCC00]/40 text-white text-sm rounded-2xl px-4 py-3 shadow-lg text-center">
+          {notice}
+        </div>
+      )}
+
       {/* ════ REGISTER ════ */}
       {step === 'register' && (
         <div className="flex-1 flex flex-col justify-center px-5 pb-8">
