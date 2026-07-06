@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import MapPicker from '../components/MapPicker';
 import AddressSearch from '../components/AddressSearch';
 import type { Category, QuoteResult, Ride, RideStatus, RideHistoryItem } from '../api';
@@ -54,69 +54,131 @@ export default function PassengerApp({ userId }: Props) {
   const [cancelling, setCancelling]   = useState(false);
   const [comment, setComment]         = useState('');
   const [freeSecsLeft, setFreeSecsLeft] = useState<number | null>(null);
+  const [notice, setNotice]           = useState<string | null>(null);
+  const [quoteError, setQuoteError]   = useState(false);
+  const [quoteRetry, setQuoteRetry]   = useState(0);
+  const [bookError, setBookError]     = useState<string | null>(null);
+  const [cancelError, setCancelError] = useState<string | null>(null);
+  const rideStatusRef = useRef<RideStatus | null>(null);
 
   useEffect(() => {
     if (!pickup || !dropoff) return;
+    let stale = false;
     setLoadingQ(true);
     setQuote(null);
+    setQuoteError(false);
     getQuote(pickup, dropoff)
-      .then(r => { if (r.ok) setQuote(r.quote); })
-      .finally(() => setLoadingQ(false));
-  }, [pickup?.lat, pickup?.lng, dropoff?.lat, dropoff?.lng]);
+      .then(r => {
+        if (stale) return;
+        if (r.ok) setQuote(r.quote);
+        else setQuoteError(true);
+      })
+      .catch(() => { if (!stale) setQuoteError(true); })
+      .finally(() => { if (!stale) setLoadingQ(false); });
+    return () => { stale = true; };
+  }, [pickup?.lat, pickup?.lng, dropoff?.lat, dropoff?.lng, quoteRetry]);
 
   useEffect(() => {
     if (!ride || rideStatus?.status !== 'driver_assigned') { setFreeSecsLeft(null); return; }
-    const iv = setInterval(async () => {
-      const p = await getCancelPolicy(ride.id);
-      setFreeSecsLeft(p.free_seconds_left ?? null);
-    }, 1000);
-    return () => clearInterval(iv);
+    let stale = false;
+    let iv: ReturnType<typeof setInterval> | undefined;
+    getCancelPolicy(ride.id)
+      .then(p => {
+        if (stale) return;
+        const initial = p.free_seconds_left ?? null;
+        setFreeSecsLeft(initial);
+        if (initial == null || initial <= 0) return;
+        const deadline = Date.now() + initial * 1000;
+        iv = setInterval(() => {
+          const left = Math.max(0, Math.round((deadline - Date.now()) / 1000));
+          setFreeSecsLeft(left);
+          if (left <= 0 && iv) clearInterval(iv);
+        }, 1000);
+      })
+      .catch(() => { if (!stale) setFreeSecsLeft(null); });
+    return () => { stale = true; if (iv) clearInterval(iv); };
   }, [ride?.id, rideStatus?.status]);
 
   useEffect(() => {
     if (!ride || !['searching', 'active'].includes(step)) return;
     const iv = setInterval(async () => {
-      const s = await getRideStatus(ride.id);
-      if (!s.ok) return;
-      setRS(s);
-      if (['driver_assigned', 'driver_arrived', 'trip_started'].includes(s.status)) setStep('active');
-      if (s.status === 'trip_completed') setStep('rating');
-      if (s.status === 'cancelled') { setStep('home'); setRide(null); }
+      try {
+        const s = await getRideStatus(ride.id);
+        if (!s.ok) return;
+        setRS(s);
+        rideStatusRef.current = s;
+        if (['driver_assigned', 'driver_arrived', 'trip_started'].includes(s.status)) setStep('active');
+        if (s.status === 'trip_completed') setStep('rating');
+        if (s.status === 'cancelled') { setStep('home'); setRide(null); }
+        if (s.status === 'expired') {
+          setStep('home'); setRide(null);
+          setNotice('Diemžēl neviens vadītājs nav pieejams. Mēģiniet vēlreiz.');
+        }
+      } catch { /* transient error — retry on next tick */ }
     }, 5000);
     return () => clearInterval(iv);
+  }, [ride?.id, step]);
+
+  // give up on searching after 3 min if the ride is still unassigned
+  useEffect(() => {
+    if (!ride || step !== 'searching') return;
+    const to = setTimeout(() => {
+      const st = rideStatusRef.current?.status ?? 'requested';
+      if (st !== 'requested') return;
+      setStep('home'); setRide(null);
+      setNotice('Diemžēl neviens vadītājs nav pieejams. Mēģiniet vēlreiz.');
+    }, 3 * 60 * 1000);
+    return () => clearTimeout(to);
   }, [ride?.id, step]);
 
   async function handleBook() {
     if (!pickup || !dropoff) return;
     setBooking(true);
+    setBookError(null);
     haptic('medium');
-    const res = await requestRide({
-      passenger_user_id: userId,
-      pickup_address:  pickup.address,
-      dropoff_address: dropoff.address,
-      pickup_lat:  pickup.lat,  pickup_lng:  pickup.lng,
-      dropoff_lat: dropoff.lat, dropoff_lng: dropoff.lng,
-      category,
-      estimated_price:        quote?.prices[category],
-      route_distance_meters:  quote?.distanceMeters,
-      route_duration_seconds: quote?.durationSeconds,
-      route_polyline:         quote?.encodedPolyline,
-      passenger_comment:      comment || undefined,
-    });
-    setBooking(false);
-    if (res.ok) { setRide(res.ride); setStep('searching'); }
+    try {
+      const res = await requestRide({
+        passenger_user_id: userId,
+        pickup_address:  pickup.address,
+        dropoff_address: dropoff.address,
+        pickup_lat:  pickup.lat,  pickup_lng:  pickup.lng,
+        dropoff_lat: dropoff.lat, dropoff_lng: dropoff.lng,
+        category,
+        estimated_price:        quote?.prices[category],
+        route_distance_meters:  quote?.distanceMeters,
+        route_duration_seconds: quote?.durationSeconds,
+        route_polyline:         quote?.encodedPolyline,
+        passenger_comment:      comment || undefined,
+      });
+      if (res.ok) {
+        rideStatusRef.current = null;
+        setCancelError(null);
+        setRide(res.ride); setStep('searching');
+      } else {
+        setBookError(res.error || 'Neizdevās izveidot pasūtījumu. Mēģiniet vēlreiz.');
+      }
+    } catch (e) {
+      setBookError(e instanceof Error ? e.message : 'Neizdevās izveidot pasūtījumu. Mēģiniet vēlreiz.');
+    } finally { setBooking(false); }
   }
 
   async function handleCancel() {
     if (!ride) return;
     haptic('medium');
     setCancelling(true);
+    setCancelError(null);
     try {
       const policy = await getCancelPolicy(ride.id);
-      if (!policy.can_cancel) return;
+      if (!policy.can_cancel) {
+        setCancelError(policy.reason || 'Braucienu šobrīd nevar atcelt.');
+        return;
+      }
       if (policy.fee > 0) { setCancelModal({ fee: policy.fee, reason: policy.reason }); return; }
-      await cancelRide(ride.id, userId, false);
-      setRide(null); setStep('home');
+      const res = await cancelRide(ride.id, userId, false);
+      if (res.ok) { setRide(null); setStep('home'); }
+      else setCancelError(res.error || 'Neizdevās atcelt braucienu. Mēģiniet vēlreiz.');
+    } catch (e) {
+      setCancelError(e instanceof Error ? e.message : 'Neizdevās atcelt braucienu. Mēģiniet vēlreiz.');
     } finally { setCancelling(false); }
   }
 
@@ -124,9 +186,17 @@ export default function PassengerApp({ userId }: Props) {
     if (!ride || !cancelModal) return;
     haptic('heavy');
     setCancelling(true);
+    setCancelError(null);
     try {
-      await cancelRide(ride.id, userId, true);
-      setCancelModal(null); setRide(null); setStep('home');
+      const res = await cancelRide(ride.id, userId, true);
+      if (res.ok) { setCancelModal(null); setRide(null); setStep('home'); }
+      else {
+        setCancelModal(null);
+        setCancelError(res.error || 'Neizdevās atcelt braucienu. Mēģiniet vēlreiz.');
+      }
+    } catch (e) {
+      setCancelModal(null);
+      setCancelError(e instanceof Error ? e.message : 'Neizdevās atcelt braucienu. Mēģiniet vēlreiz.');
     } finally { setCancelling(false); }
   }
 
@@ -195,6 +265,15 @@ export default function PassengerApp({ userId }: Props) {
               </button>
             </div>
 
+            {/* notice (e.g. no driver found) */}
+            {notice && (
+              <div className="bg-yellow-500/10 border border-yellow-500/20 rounded-2xl px-4 py-3 flex items-start gap-2">
+                <span className="text-yellow-400 text-sm">ℹ️</span>
+                <p className="text-yellow-300 text-xs leading-relaxed flex-1">{notice}</p>
+                <button onClick={() => setNotice(null)} className="text-slate-500 text-xs">✕</button>
+              </div>
+            )}
+
             {/* address card */}
             <div className="bg-[#252836] rounded-2xl overflow-hidden">
               {/* pickup */}
@@ -223,7 +302,7 @@ export default function PassengerApp({ userId }: Props) {
             {/* CTA */}
             {pickup && dropoff ? (
               <button
-                onClick={() => setStep('confirm')}
+                onClick={() => { setNotice(null); setStep('confirm'); }}
                 disabled={loadingQuote}
                 className="w-full bg-[#FFCC00] active:brightness-90 disabled:opacity-60 text-[#0f1117] font-bold py-4 rounded-2xl text-base shadow-lg shadow-yellow-500/20"
               >
@@ -256,6 +335,19 @@ export default function PassengerApp({ userId }: Props) {
             {loadingQuote && (
               <div className="space-y-3">
                 {[1,2,3].map(i => <div key={i} className="h-20 bg-[#252836] rounded-2xl animate-pulse" />)}
+              </div>
+            )}
+
+            {!loadingQuote && quoteError && (
+              <div className="bg-red-500/10 border border-red-500/20 rounded-2xl p-5 flex flex-col items-center gap-3 text-center">
+                <span className="text-2xl">⚠️</span>
+                <p className="text-red-300 text-sm">Neizdevās aprēķināt cenu. Pārbaudi savienojumu.</p>
+                <button
+                  type="button"
+                  onClick={() => { haptic('light'); setQuoteRetry(n => n + 1); }}
+                  className="bg-[#252836] active:bg-[#2f3347] text-white font-semibold px-5 py-2.5 rounded-xl text-sm">
+                  Mēģināt vēlreiz
+                </button>
               </div>
             )}
 
@@ -303,6 +395,13 @@ export default function PassengerApp({ userId }: Props) {
               />
             </div>
 
+            {bookError && (
+              <div className="bg-red-500/10 border border-red-500/20 rounded-2xl px-4 py-3 flex items-start gap-2">
+                <span className="text-red-400 text-sm">⚠️</span>
+                <p className="text-red-300 text-xs leading-relaxed">{bookError}</p>
+              </div>
+            )}
+
             <button
               onClick={handleBook}
               disabled={booking || !quote}
@@ -336,6 +435,13 @@ export default function PassengerApp({ userId }: Props) {
                 <span className="text-[#FFCC00] font-bold text-base">€{ride?.estimated_price}</span>
               </div>
             </div>
+
+            {cancelError && (
+              <div className="bg-red-500/10 border border-red-500/20 rounded-2xl px-4 py-3 flex items-start gap-2">
+                <span className="text-red-400 text-sm">⚠️</span>
+                <p className="text-red-300 text-xs leading-relaxed">{cancelError}</p>
+              </div>
+            )}
 
             <button onClick={handleCancel} disabled={cancelling}
               className="w-full bg-[#252836] active:bg-[#2f3347] disabled:opacity-50 text-red-400 font-semibold py-3.5 rounded-2xl text-sm border border-red-500/20">
@@ -410,6 +516,12 @@ export default function PassengerApp({ userId }: Props) {
                 {freeSecsLeft === 0 && (
                   <div className="flex items-center justify-center gap-2 bg-red-500/10 rounded-xl px-4 py-2">
                     <span className="text-red-400 text-xs font-semibold">⚠️ Atcelšana: €2.00 maksa</span>
+                  </div>
+                )}
+                {cancelError && (
+                  <div className="bg-red-500/10 border border-red-500/20 rounded-2xl px-4 py-3 flex items-start gap-2">
+                    <span className="text-red-400 text-sm">⚠️</span>
+                    <p className="text-red-300 text-xs leading-relaxed">{cancelError}</p>
                   </div>
                 )}
                 <button onClick={handleCancel} disabled={cancelling}

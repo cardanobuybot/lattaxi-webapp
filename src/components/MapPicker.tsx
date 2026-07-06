@@ -64,6 +64,14 @@ export default function MapPicker({
   const dropoffRef = useRef<L.Marker | null>(null);
   const driverRef = useRef<L.Marker | null>(null);
   const polylineRef = useRef<L.Polyline | null>(null);
+  const onMapClickRef = useRef(onMapClick);
+  const interactiveRef = useRef(interactive);
+
+  // Keep latest props available to the (once-registered) click handler
+  useEffect(() => {
+    onMapClickRef.current = onMapClick;
+    interactiveRef.current = interactive;
+  });
 
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return;
@@ -76,9 +84,10 @@ export default function MapPicker({
     L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
       maxZoom: 19,
     }).addTo(map);
-    if (interactive) {
-      map.on('click', (e) => onMapClick?.({ lat: e.latlng.lat, lng: e.latlng.lng }));
-    }
+    map.on('click', (e) => {
+      if (!interactiveRef.current) return;
+      onMapClickRef.current?.({ lat: e.latlng.lat, lng: e.latlng.lng });
+    });
     mapRef.current = map;
     return () => { map.remove(); mapRef.current = null; };
   }, []);

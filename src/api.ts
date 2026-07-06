@@ -44,18 +44,34 @@ export interface User {
   role: string;
 }
 
-async function post<T>(path: string, body: unknown): Promise<T> {
-  const res = await fetch(`${API}${path}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
+export function authHeaders(): Record<string, string> {
+  return { 'x-telegram-init-data': window.Telegram?.WebApp?.initData || '' };
+}
+
+async function handleResponse<T>(res: Response): Promise<T> {
+  if (!res.ok) {
+    let message = `Request failed (${res.status})`;
+    try {
+      const data = await res.json();
+      if (data?.error) message = data.error;
+    } catch { /* keep default message */ }
+    throw new Error(message);
+  }
   return res.json();
 }
 
+async function post<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(`${API}${path}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify(body),
+  });
+  return handleResponse<T>(res);
+}
+
 async function get<T>(path: string): Promise<T> {
-  const res = await fetch(`${API}${path}`);
-  return res.json();
+  const res = await fetch(`${API}${path}`, { headers: authHeaders() });
+  return handleResponse<T>(res);
 }
 
 export async function registerUser(telegramId: number, name: string) {

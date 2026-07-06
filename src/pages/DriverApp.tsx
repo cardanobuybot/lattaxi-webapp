@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import MapPicker from '../components/MapPicker';
 import type { Category, RideHistoryItem } from '../api';
-import { registerDriver, setDriverStatus, getRideStatus, getDriverHistory, getDriverEarnings, reportNoShow } from '../api';
+import { registerDriver, setDriverStatus, getRideStatus, getDriverHistory, getDriverEarnings, reportNoShow, authHeaders } from '../api';
 import { haptic } from '../telegram';
 
 const API = import.meta.env.VITE_API_URL ?? 'https://api.lattaxi.lv';
@@ -28,7 +28,7 @@ async function updateDriverLocation(telegramId: number, lat: number, lng: number
   try {
     await fetch(`${API}/drivers/location`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify({ telegram_id: telegramId, lat, lng }),
     });
   } catch { /* ignore */ }
@@ -37,7 +37,7 @@ async function updateDriverLocation(telegramId: number, lat: number, lng: number
 async function updateRideStatus(rideId: number, status: string, telegramId: number, pos?: { lat: number; lng: number }) {
   await fetch(`${API}/rides/${rideId}/update-status`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
     body: JSON.stringify({
       status,
       driver_telegram_id: telegramId,
@@ -46,12 +46,18 @@ async function updateRideStatus(rideId: number, status: string, telegramId: numb
   });
 }
 
-async function respondToOffer(offerId: number, accept: boolean, telegramId: number) {
-  await fetch(`${API}/driver-offers/${offerId}/${accept ? 'accept' : 'reject'}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ driver_telegram_id: telegramId }),
-  });
+async function respondToOffer(offerId: number, accept: boolean, telegramId: number): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const res = await fetch(`${API}/driver-offers/${offerId}/${accept ? 'accept' : 'reject'}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ driver_telegram_id: telegramId }),
+    });
+    const data = await res.json().catch(() => null);
+    return { ok: Boolean(res.ok && data?.ok), error: data?.error };
+  } catch {
+    return { ok: false };
+  }
 }
 
 export default function DriverApp({ telegramId, userName }: Props) {
@@ -75,6 +81,14 @@ export default function DriverApp({ telegramId, userName }: Props) {
   const [noShowLoading, setNoShowLoading] = useState(false);
   const [licenseNumber, setLicenseNumber] = useState('');
   const [rejectionReason, setRejectionReason] = useState('');
+  const [notice, setNotice] = useState<string | null>(null);
+  const noticeTimerRef = useRef<number | null>(null);
+
+  function showNotice(msg: string) {
+    setNotice(msg);
+    if (noticeTimerRef.current !== null) clearTimeout(noticeTimerRef.current);
+    noticeTimerRef.current = window.setTimeout(() => setNotice(null), 4000);
+  }
 
   useEffect(() => {
     if (online && navigator.geolocation) {
@@ -100,7 +114,7 @@ export default function DriverApp({ telegramId, userName }: Props) {
     if (!online || step !== 'dashboard') return;
     const iv = setInterval(async () => {
       try {
-        const res = await fetch(`${API}/drivers/${telegramId}/offers/pending`);
+        const res = await fetch(`${API}/drivers/${telegramId}/offers/pending`, { headers: authHeaders() });
         if (!res.ok) return;
         const data = await res.json();
         if (data.ok && data.offer) { setOffer(data.offer); setStep('offer'); haptic('heavy'); }
@@ -136,15 +150,16 @@ export default function DriverApp({ telegramId, userName }: Props) {
 
   useEffect(() => {
     async function checkRegistration() {
-      const res = await fetch(`${API}/drivers/me?telegram_id=${telegramId}`).then(r => r.json()).catch(() => null);
+      const res = await fetch(`${API}/drivers/me?telegram_id=${telegramId}`, { headers: authHeaders() }).then(r => r.json()).catch(() => null);
       if (!res || !res.ok) return; // not registered, stay on register
       if (res.driver.verification_status === 'approved') setStep('dashboard');
       else if (res.driver.verification_status === 'rejected') { setRejectionReason(res.driver.rejection_reason || ''); setStep('rejected'); }
       else setStep('pending');
-      // also update car/category from server
+      // also update car/category/online state from server
       setCar(res.driver.car || '');
       setCarNumber(res.driver.car_number || '');
       setCategory(res.driver.category || 'economy');
+      if (typeof res.driver.is_online === 'boolean') setOnline(res.driver.is_online);
     }
     checkRegistration();
   }, []); // run once on mount
@@ -155,7 +170,7 @@ export default function DriverApp({ telegramId, userName }: Props) {
     const res = await registerDriver({ telegram_id: telegramId, name: userName, car, car_number: carNumber, category, license_number: licenseNumber }) as { ok: boolean };
     if (res.ok) {
       // check verification status
-      const me = await fetch(`${API}/drivers/me?telegram_id=${telegramId}`).then(r => r.json());
+      const me = await fetch(`${API}/drivers/me?telegram_id=${telegramId}`, { headers: authHeaders() }).then(r => r.json());
       if (me.ok && me.driver.verification_status === 'approved') setStep('dashboard');
       else if (me.ok && me.driver.verification_status === 'rejected') { setRejectionReason(me.driver.rejection_reason || ''); setStep('rejected'); }
       else setStep('pending');
@@ -164,22 +179,37 @@ export default function DriverApp({ telegramId, userName }: Props) {
 
   async function toggleOnline() {
     haptic('medium');
-    await setDriverStatus(telegramId, online ? 'offline' : 'online');
-    setOnline(!online);
+    const next = online ? 'offline' : 'online';
+    try {
+      const res = await setDriverStatus(telegramId, next) as { ok: boolean; error?: string };
+      if (res.ok) {
+        setOnline(next === 'online');
+      } else if (res.error === 'NOT_VERIFIED') {
+        showNotice('Jūsu konts vēl gaida verifikāciju');
+      } else {
+        showNotice('Neizdevās mainīt statusu. Mēģiniet vēlreiz.');
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : '';
+      if (msg.includes('NOT_VERIFIED')) showNotice('Jūsu konts vēl gaida verifikāciju');
+      else showNotice('Neizdevās mainīt statusu. Mēģiniet vēlreiz.');
+    }
   }
 
   async function handleOfferResponse(accept: boolean) {
     if (!offer) return;
     haptic(accept ? 'medium' : 'light');
-    await respondToOffer(offer.offerId, accept, telegramId);
-    if (accept) {
+    const res = await respondToOffer(offer.offerId, accept, telegramId);
+    if (accept && res.ok) {
       setActiveRideId(offer.rideId);
       setRideStatus('driver_assigned');
       setActivePickup({ lat: offer.pickupLat, lng: offer.pickupLng, address: offer.pickup });
       setActiveDropoff({ lat: offer.dropoffLat, lng: offer.dropoffLng, address: offer.dropoff });
       setStep('active');
+    } else {
+      if (accept && !res.ok) showNotice('Pasūtījums vairs nav pieejams');
+      setStep('dashboard'); // resumes pending-offers polling
     }
-    else setStep('dashboard');
     setOffer(null);
   }
 
