@@ -11,6 +11,9 @@ interface Props {
   driverMarker?: LatLng | null;
   routePolyline?: string | null;
   onMapClick?: (pos: LatLng) => void;
+  onMoveStart?: () => void;
+  onCenterChange?: (pos: LatLng) => void;
+  panOnClick?: boolean;
   height?: string;
   interactive?: boolean;
 }
@@ -55,6 +58,9 @@ export default function MapPicker({
   driverMarker,
   routePolyline,
   onMapClick,
+  onMoveStart,
+  onCenterChange,
+  panOnClick = false,
   height = '55vh',
   interactive = true,
 }: Props) {
@@ -65,11 +71,17 @@ export default function MapPicker({
   const driverRef = useRef<L.Marker | null>(null);
   const polylineRef = useRef<L.Polyline | null>(null);
   const onMapClickRef = useRef(onMapClick);
+  const onMoveStartRef = useRef(onMoveStart);
+  const onCenterChangeRef = useRef(onCenterChange);
+  const panOnClickRef = useRef(panOnClick);
   const interactiveRef = useRef(interactive);
 
-  // Keep latest props available to the (once-registered) click handler
+  // Keep latest props available to the (once-registered) handlers
   useEffect(() => {
     onMapClickRef.current = onMapClick;
+    onMoveStartRef.current = onMoveStart;
+    onCenterChangeRef.current = onCenterChange;
+    panOnClickRef.current = panOnClick;
     interactiveRef.current = interactive;
   });
 
@@ -86,9 +98,17 @@ export default function MapPicker({
     }).addTo(map);
     map.on('click', (e) => {
       if (!interactiveRef.current) return;
+      if (panOnClickRef.current) { map.panTo(e.latlng, { animate: true }); return; }
       onMapClickRef.current?.({ lat: e.latlng.lat, lng: e.latlng.lng });
     });
+    map.on('movestart', () => { onMoveStartRef.current?.(); });
+    map.on('moveend', () => {
+      const c = map.getCenter();
+      onCenterChangeRef.current?.({ lat: c.lat, lng: c.lng });
+    });
     mapRef.current = map;
+    const c = map.getCenter();
+    onCenterChangeRef.current?.({ lat: c.lat, lng: c.lng });
     return () => { map.remove(); mapRef.current = null; };
   }, []);
 

@@ -60,6 +60,42 @@ export default function PassengerApp({ userId }: Props) {
   const [bookError, setBookError]     = useState<string | null>(null);
   const [cancelError, setCancelError] = useState<string | null>(null);
   const rideStatusRef = useRef<RideStatus | null>(null);
+  const [picking, setPicking]         = useState<'pickup' | 'dropoff' | null>('pickup');
+  const [pinPos, setPinPos]           = useState<LatLng | null>(null);
+  const [pinAddress, setPinAddress]   = useState<string | null>(null);
+  const [pinMoving, setPinMoving]     = useState(false);
+  const [mapFly, setMapFly]           = useState<LatLng | null>(null);
+  const geoSeqRef = useRef(0);
+
+  useEffect(() => {
+    navigator.geolocation?.getCurrentPosition(
+      p => setMapFly({ lat: p.coords.latitude, lng: p.coords.longitude }),
+      () => {},
+      { enableHighAccuracy: true, timeout: 5000 }
+    );
+  }, []);
+
+  function handleCenterChange(pos: LatLng) {
+    setPinMoving(false);
+    setPinPos(pos);
+    const seq = ++geoSeqRef.current;
+    setPinAddress(null);
+    reverseGeocode(pos.lat, pos.lng).then(addr => {
+      if (geoSeqRef.current === seq) setPinAddress(addr);
+    });
+  }
+
+  function confirmPin() {
+    if (!pinPos || !pinAddress) return;
+    haptic('medium');
+    if (picking === 'pickup') {
+      setPickup({ ...pinPos, address: pinAddress });
+      setPicking(dropoff ? null : 'dropoff');
+    } else if (picking === 'dropoff') {
+      setDropoff({ ...pinPos, address: pinAddress });
+      setPicking(null);
+    }
+  }
 
   useEffect(() => {
     if (!pickup || !dropoff) return;
@@ -228,19 +264,27 @@ export default function PassengerApp({ userId }: Props) {
         <div className="absolute inset-0">
           <MapPicker
             height="100%"
-            pickupMarker={pickup}
-            dropoffMarker={dropoff}
+            center={mapFly ?? undefined}
+            pickupMarker={picking === 'pickup' ? null : pickup}
+            dropoffMarker={picking === 'dropoff' ? null : dropoff}
             driverMarker={rideStatus?.driver_location ?? null}
             routePolyline={step === 'confirm' ? quote?.encodedPolyline ?? null : null}
-            onMapClick={async (pos) => {
-              if (step !== 'home') return;
-              haptic('light');
-              const address = await reverseGeocode(pos.lat, pos.lng);
-              if (!pickup) setPickup({ ...pos, address });
-              else setDropoff({ ...pos, address });
-            }}
+            panOnClick={step === 'home' && !!picking}
+            onMoveStart={() => { if (step === 'home' && picking) setPinMoving(true); }}
+            onCenterChange={(pos) => { if (step === 'home' && picking) handleCenterChange(pos); }}
             interactive={step === 'home'}
           />
+        </div>
+      )}
+
+      {/* ─── CENTER PIN (Bolt-style point picking) ─── */}
+      {showMap && step === 'home' && picking && (
+        <div className="absolute left-1/2 top-1/2 z-[5] pointer-events-none" style={{ transform: 'translate(-50%, -100%)' }}>
+          <div className={`flex flex-col items-center transition-transform duration-150 ${pinMoving ? '-translate-y-1.5' : ''}`}>
+            <div className={`w-5 h-5 rounded-full border-[3px] border-white shadow-lg ${picking === 'pickup' ? 'bg-[#16a34a]' : 'bg-[#dc2626]'}`} />
+            <div className="w-0.5 h-4 bg-[#0f1117]/80" />
+          </div>
+          <div className={`mx-auto mt-0.5 w-2 h-1 bg-black/30 rounded-full blur-[1px] transition-opacity ${pinMoving ? 'opacity-0' : 'opacity-100'}`} />
         </div>
       )}
 
@@ -285,8 +329,17 @@ export default function PassengerApp({ userId }: Props) {
                 <AddressSearch
                   placeholder="Izejas punkts"
                   value={pickup?.address ?? ''}
-                  onChange={(address, lat, lng) => setPickup({ lat, lng, address })}
+                  onChange={(address, lat, lng) => {
+                    setPickup({ lat, lng, address });
+                    setMapFly({ lat, lng });
+                    if (picking === 'pickup') setPicking(dropoff ? null : 'dropoff');
+                  }}
                 />
+                <button type="button"
+                  onClick={() => { haptic('light'); setPicking('pickup'); if (pickup) setMapFly({ lat: pickup.lat, lng: pickup.lng }); }}
+                  className={`flex-shrink-0 text-sm px-2.5 py-1.5 rounded-lg ${picking === 'pickup' ? 'bg-[#FFCC00]/20' : 'bg-[#ffffff0a]'}`}>
+                  🎯
+                </button>
               </div>
               {/* dropoff */}
               <div className="flex items-center gap-3 px-4 py-3">
@@ -294,13 +347,39 @@ export default function PassengerApp({ userId }: Props) {
                 <AddressSearch
                   placeholder="Galamērķis"
                   value={dropoff?.address ?? ''}
-                  onChange={(address, lat, lng) => setDropoff({ lat, lng, address })}
+                  onChange={(address, lat, lng) => {
+                    setDropoff({ lat, lng, address });
+                    setMapFly({ lat, lng });
+                    if (picking === 'dropoff') setPicking(null);
+                  }}
                 />
+                <button type="button"
+                  onClick={() => { haptic('light'); setPicking('dropoff'); if (dropoff) setMapFly({ lat: dropoff.lat, lng: dropoff.lng }); }}
+                  className={`flex-shrink-0 text-sm px-2.5 py-1.5 rounded-lg ${picking === 'dropoff' ? 'bg-[#FFCC00]/20' : 'bg-[#ffffff0a]'}`}>
+                  🎯
+                </button>
               </div>
             </div>
 
             {/* CTA */}
-            {pickup && dropoff ? (
+            {picking ? (
+              <div className="space-y-2">
+                <div className="bg-[#252836] rounded-2xl px-4 py-3 flex items-center gap-3">
+                  <div className={`w-3 h-3 flex-shrink-0 ${picking === 'pickup' ? 'rounded-full bg-[#4ade80]' : 'rounded-sm bg-[#f87171]'}`} />
+                  <span className={`text-sm flex-1 truncate ${pinMoving || !pinAddress ? 'text-slate-500' : 'text-white'}`}>
+                    {pinMoving || !pinAddress ? 'Meklē adresi...' : pinAddress}
+                  </span>
+                </div>
+                <button
+                  onClick={confirmPin}
+                  disabled={pinMoving || !pinAddress}
+                  className="w-full bg-[#FFCC00] active:brightness-90 disabled:opacity-50 text-[#0f1117] font-bold py-4 rounded-2xl text-base shadow-lg shadow-yellow-500/20"
+                >
+                  {picking === 'pickup' ? 'Apstiprināt izejas punktu' : 'Apstiprināt galamērķi'}
+                </button>
+                <p className="text-center text-slate-500 text-xs">Pavelciet karti, lai precizētu punktu</p>
+              </div>
+            ) : pickup && dropoff ? (
               <button
                 onClick={() => { setNotice(null); setStep('confirm'); }}
                 disabled={loadingQuote}
@@ -584,7 +663,7 @@ export default function PassengerApp({ userId }: Props) {
                 <p className="text-white font-bold text-xl">Paldies!</p>
                 <p className="text-slate-400 text-sm">Tiekamies nākamreiz</p>
                 <button
-                  onClick={() => { setStep('home'); setRide(null); setQuote(null); setPickup(null); setDropoff(null); setRated(false); }}
+                  onClick={() => { setStep('home'); setRide(null); setQuote(null); setPickup(null); setDropoff(null); setRated(false); setPicking('pickup'); }}
                   className="w-full bg-[#FFCC00] text-[#0f1117] font-bold py-4 rounded-2xl text-base mt-4 shadow-lg shadow-yellow-500/20">
                   Jauns brauciens
                 </button>
