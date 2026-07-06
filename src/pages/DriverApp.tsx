@@ -1,13 +1,13 @@
 import { useState, useEffect, useRef } from 'react';
 import MapPicker from '../components/MapPicker';
 import type { Category, RideHistoryItem } from '../api';
-import { registerDriver, setDriverStatus, getRideStatus, getDriverHistory } from '../api';
+import { registerDriver, setDriverStatus, getRideStatus, getDriverHistory, getDriverEarnings } from '../api';
 import { haptic } from '../telegram';
 
 const API = import.meta.env.VITE_API_URL ?? 'https://api.lattaxi.lv';
 
 interface Props { telegramId: number; userName: string }
-type DriverStep = 'register' | 'dashboard' | 'offer' | 'active' | 'history';
+type DriverStep = 'register' | 'dashboard' | 'offer' | 'active' | 'history' | 'earnings';
 
 interface OfferData {
   rideId: number; offerId: number;
@@ -65,6 +65,8 @@ export default function DriverApp({ telegramId, userName }: Props) {
   const geoWatchRef = useRef<number | null>(null);
   const [history, setHistory]           = useState<RideHistoryItem[]>([]);
   const [histLoading, setHistLoad]      = useState(false);
+  const [earnings, setEarnings]         = useState<{ today: string; week: string; month: string; rides_today: number; rides_week: number; tips_today: string } | null>(null);
+  const [earningsLoading, setEarningsLoad] = useState(false);
 
   useEffect(() => {
     if (online && navigator.geolocation) {
@@ -137,6 +139,15 @@ export default function DriverApp({ telegramId, userName }: Props) {
     }
     else setStep('dashboard');
     setOffer(null);
+  }
+
+  async function openEarnings() {
+    setStep('earnings');
+    setEarningsLoad(true);
+    try {
+      const r = await getDriverEarnings(telegramId);
+      if (r.ok) setEarnings(r);
+    } finally { setEarningsLoad(false); }
   }
 
   async function openHistory() {
@@ -263,10 +274,16 @@ export default function DriverApp({ telegramId, userName }: Props) {
                   <span className="text-3xl">💤</span>
                   <p className="text-slate-400 text-sm text-center">Nospied <span className="text-white font-semibold">Online</span>, lai saņemtu pasūtījumus</p>
                 </div>
-                <button onClick={openHistory}
-                  className="w-full bg-[#252836] active:bg-[#2f3347] text-slate-300 font-medium py-3.5 rounded-2xl text-sm flex items-center justify-center gap-2">
-                  🕐 Braucienu vēsture
-                </button>
+                <div className="grid grid-cols-2 gap-2">
+                  <button onClick={openEarnings}
+                    className="bg-[#FFCC00]/10 active:bg-[#FFCC00]/20 text-[#FFCC00] font-semibold py-3.5 rounded-2xl text-sm flex items-center justify-center gap-2">
+                    💰 Ieņēmumi
+                  </button>
+                  <button onClick={openHistory}
+                    className="bg-[#252836] active:bg-[#2f3347] text-slate-300 font-medium py-3.5 rounded-2xl text-sm flex items-center justify-center gap-2">
+                    🕐 Vēsture
+                  </button>
+                </div>
               </div>
             )}
           </div>
@@ -456,6 +473,71 @@ export default function DriverApp({ telegramId, userName }: Props) {
                 🏁 Pabeigt braucienu
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ════ EARNINGS ════ */}
+      {step === 'earnings' && (
+        <div className="flex-1 flex flex-col bg-[#1a1d27]">
+          <div className="px-4 pt-6 pb-4 flex items-center justify-between">
+            <p className="text-white font-bold text-lg">Ieņēmumi</p>
+            <button onClick={() => setStep('dashboard')}
+              className="bg-[#252836] px-3 py-1.5 rounded-full text-slate-400 text-xs">
+              ✕ Aizvērt
+            </button>
+          </div>
+
+          <div className="flex-1 overflow-y-auto px-4 pb-8 space-y-4">
+            {earningsLoading && (
+              <div className="space-y-3">
+                {[1,2,3].map(i => <div key={i} className="h-24 bg-[#252836] rounded-2xl animate-pulse" />)}
+              </div>
+            )}
+
+            {!earningsLoading && earnings && (
+              <>
+                {/* Today */}
+                <div className="bg-[#252836] rounded-2xl p-5">
+                  <p className="text-slate-400 text-xs mb-3 uppercase tracking-widest">Šodien</p>
+                  <div className="flex items-end justify-between">
+                    <div>
+                      <p className="text-[#FFCC00] font-extrabold text-4xl">€{earnings.today}</p>
+                      {Number(earnings.tips_today) > 0 && (
+                        <p className="text-green-400 text-sm mt-1">+€{earnings.tips_today} dzeramnauда</p>
+                      )}
+                    </div>
+                    <div className="text-right">
+                      <p className="text-white font-bold text-2xl">{earnings.rides_today}</p>
+                      <p className="text-slate-500 text-xs">braucieni</p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Week & Month */}
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="bg-[#252836] rounded-2xl p-4">
+                    <p className="text-slate-400 text-xs mb-2 uppercase tracking-widest">Nedēļa</p>
+                    <p className="text-white font-bold text-2xl">€{earnings.week}</p>
+                    <p className="text-slate-500 text-xs mt-1">{earnings.rides_week} braucieni</p>
+                  </div>
+                  <div className="bg-[#252836] rounded-2xl p-4">
+                    <p className="text-slate-400 text-xs mb-2 uppercase tracking-widest">Mēnesis</p>
+                    <p className="text-white font-bold text-2xl">€{earnings.month}</p>
+                  </div>
+                </div>
+
+                {/* avg */}
+                {earnings.rides_week > 0 && (
+                  <div className="bg-[#252836] rounded-2xl p-4 flex items-center justify-between">
+                    <span className="text-slate-400 text-sm">Vid. par braucienu (nedēļa)</span>
+                    <span className="text-[#FFCC00] font-bold text-base">
+                      €{(Number(earnings.week) / earnings.rides_week).toFixed(2)}
+                    </span>
+                  </div>
+                )}
+              </>
+            )}
           </div>
         </div>
       )}

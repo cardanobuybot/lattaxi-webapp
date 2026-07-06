@@ -155,6 +155,14 @@ export async function getPassengerHistory(passengerUserId: number, offset = 0) {
   );
 }
 
+export async function getDriverEarnings(telegramId: number) {
+  return get<{
+    ok: boolean;
+    today: string; week: string; month: string;
+    rides_today: number; rides_week: number; tips_today: string;
+  }>(`/drivers/earnings?telegram_id=${telegramId}`);
+}
+
 export async function getDriverHistory(telegramId: number, offset = 0) {
   return get<{ ok: boolean; rides: RideHistoryItem[]; total: number }>(
     `/rides/history/driver?telegram_id=${telegramId}&offset=${offset}`
