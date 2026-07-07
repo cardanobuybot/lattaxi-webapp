@@ -18,6 +18,25 @@ interface OfferData {
   passengerComment: string | null;
 }
 
+function playOfferSound() {
+  try {
+    const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+    const ctx = new Ctx();
+    void ctx.resume();
+    [0, 0.25].forEach((delay, i) => {
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      o.connect(g); g.connect(ctx.destination);
+      o.frequency.value = i === 0 ? 880 : 1100;
+      const t = ctx.currentTime + delay;
+      g.gain.setValueAtTime(0.35, t);
+      g.gain.exponentialRampToValueAtTime(0.001, t + 0.22);
+      o.start(t); o.stop(t + 0.22);
+    });
+    setTimeout(() => { void ctx.close(); }, 800);
+  } catch { /* audio not available */ }
+}
+
 const CATS: { id: Category; icon: string; label: string }[] = [
   { id: 'economy', icon: '🚗', label: 'Economy' },
   { id: 'comfort', icon: '🚙', label: 'Comfort' },
@@ -117,9 +136,9 @@ export default function DriverApp({ telegramId, userName }: Props) {
         const res = await fetch(`${API}/drivers/${telegramId}/offers/pending`, { headers: authHeaders() });
         if (!res.ok) return;
         const data = await res.json();
-        if (data.ok && data.offer) { setOffer(data.offer); setStep('offer'); haptic('heavy'); }
+        if (data.ok && data.offer) { setOffer(data.offer); setStep('offer'); haptic('heavy'); playOfferSound(); }
       } catch { /* ignore */ }
-    }, 4000);
+    }, 3000);
     return () => clearInterval(iv);
   }, [online, step, telegramId]);
 
@@ -131,7 +150,7 @@ export default function DriverApp({ telegramId, userName }: Props) {
       if (s.status === 'trip_completed' || s.status === 'cancelled') {
         setStep('dashboard'); setActiveRideId(null); setRideStatus('');
       }
-    }, 5000);
+    }, 3000);
     return () => clearInterval(iv);
   }, [activeRideId, step]);
 

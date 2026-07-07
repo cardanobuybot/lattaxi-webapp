@@ -61,9 +61,21 @@ async function searchGooglePlaces(q: string): Promise<Suggestion[]> {
   return details.filter(s => s.lat);
 }
 
+const RECENTS_KEY = 'lattaxi_recent_addresses';
+
+function loadRecents(): Suggestion[] {
+  try { return JSON.parse(localStorage.getItem(RECENTS_KEY) || '[]'); } catch { return []; }
+}
+
+function saveRecent(s: Suggestion) {
+  const list = [s, ...loadRecents().filter(r => r.display_name !== s.display_name)].slice(0, 5);
+  try { localStorage.setItem(RECENTS_KEY, JSON.stringify(list)); } catch { /* ignore */ }
+}
+
 export default function AddressSearch({ placeholder, value, onChange }: Props) {
   const [query, setQuery]           = useState(value);
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
+  const [recents, setRecents]       = useState<Suggestion[]>(loadRecents);
   const [open, setOpen]             = useState(false);
   const [loading, setLoading]       = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -73,7 +85,7 @@ export default function AddressSearch({ placeholder, value, onChange }: Props) {
   function search(q: string) {
     setQuery(q);
     clearTimeout(timer.current);
-    if (q.length < 2) { setSuggestions([]); setOpen(false); return; }
+    if (q.length < 2) { setSuggestions([]); setOpen(recents.length > 0); return; }
     timer.current = setTimeout(async () => {
       setLoading(true);
       try {
@@ -91,8 +103,13 @@ export default function AddressSearch({ placeholder, value, onChange }: Props) {
     setQuery(short);
     setSuggestions([]);
     setOpen(false);
+    saveRecent({ display_name: short, lat: s.lat, lon: s.lon });
+    setRecents(loadRecents());
     onChange(short, parseFloat(s.lat), parseFloat(s.lon));
   }
+
+  const showingRecents = query.trim().length < 2;
+  const list = showingRecents ? recents : suggestions;
 
   return (
     <div className="flex-1 relative">
@@ -102,7 +119,7 @@ export default function AddressSearch({ placeholder, value, onChange }: Props) {
           placeholder={placeholder}
           value={query}
           onChange={e => search(e.target.value)}
-          onFocus={() => suggestions.length > 0 && setOpen(true)}
+          onFocus={() => list.length > 0 && setOpen(true)}
         />
         {loading && <span className="text-slate-600 text-xs animate-pulse">●●●</span>}
         {!loading && query && (
@@ -115,16 +132,21 @@ export default function AddressSearch({ placeholder, value, onChange }: Props) {
           </button>
         )}
       </div>
-      {open && suggestions.length > 0 && (
+      {open && list.length > 0 && (
         <ul className="absolute left-0 right-0 top-full mt-1 z-50 bg-[#1e2130] border border-[#ffffff12] rounded-2xl overflow-hidden shadow-2xl">
-          {suggestions.map((s, i) => (
+          {showingRecents && (
+            <li className="px-4 pt-2.5 pb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+              Nesenās adreses
+            </li>
+          )}
+          {list.map((s, i) => (
             <li key={i} className="border-b border-[#ffffff08] last:border-0">
               <button
                 type="button"
                 className="w-full text-left px-4 py-3 text-sm text-slate-200 active:bg-[#252836] flex items-start gap-3"
                 onClick={() => pick(s)}
               >
-                <span className="text-slate-500 mt-0.5 flex-shrink-0">📍</span>
+                <span className="text-slate-500 mt-0.5 flex-shrink-0">{showingRecents ? '🕐' : '📍'}</span>
                 <span className="truncate">{s.display_name.split(',').slice(0, 3).join(', ')}</span>
               </button>
             </li>

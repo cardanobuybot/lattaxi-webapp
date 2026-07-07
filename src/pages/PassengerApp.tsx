@@ -151,7 +151,7 @@ export default function PassengerApp({ userId }: Props) {
           setNotice('Diemžēl neviens vadītājs nav pieejams. Mēģiniet vēlreiz.');
         }
       } catch { /* transient error — retry on next tick */ }
-    }, 5000);
+    }, 3000);
     return () => clearInterval(iv);
   }, [ride?.id, step]);
 
@@ -529,6 +529,15 @@ export default function PassengerApp({ userId }: Props) {
           </div>
         )}
 
+        {/* ════ ACTIVE (skeleton while status loads) ════ */}
+        {step === 'active' && !rideStatus && (
+          <div className="px-4 pb-8 space-y-4 animate-pulse">
+            <div className="h-8 w-40 bg-[#252836] rounded-full mt-2" />
+            <div className="h-[88px] bg-[#252836] rounded-2xl" />
+            <div className="h-24 bg-[#252836] rounded-2xl" />
+          </div>
+        )}
+
         {/* ════ ACTIVE ════ */}
         {step === 'active' && rideStatus && (
           <div className="px-4 pb-8 space-y-4">
@@ -546,8 +555,10 @@ export default function PassengerApp({ userId }: Props) {
             {/* driver card */}
             {rideStatus.driver && (
               <div className="bg-[#252836] rounded-2xl p-4 flex items-center gap-4">
-                <div className="w-14 h-14 rounded-2xl bg-[#1a1d27] flex items-center justify-center text-3xl flex-shrink-0">
-                  🧑‍✈️
+                <div className="w-14 h-14 rounded-2xl bg-[#FFCC00]/15 flex items-center justify-center flex-shrink-0">
+                  <span className="text-[#FFCC00] font-extrabold text-xl">
+                    {rideStatus.driver.name?.trim().split(/\s+/).map(w => w[0]).slice(0, 2).join('').toUpperCase() || '🚕'}
+                  </span>
                 </div>
                 <div className="flex-1 min-w-0">
                   <p className="text-white font-bold text-base truncate">{rideStatus.driver.name}</p>
