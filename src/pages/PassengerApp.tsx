@@ -26,6 +26,13 @@ async function reverseGeocode(lat: number, lng: number): Promise<string> {
     return `${lat.toFixed(4)}, ${lng.toFixed(4)}`;
   }
 }
+function loadFav(kind: 'home' | 'work'): (LatLng & { address: string }) | null {
+  try {
+    const raw = localStorage.getItem(`lattaxi_fav_${kind}`);
+    return raw ? JSON.parse(raw) : null;
+  } catch { return null; }
+}
+
 type Step = 'home' | 'confirm' | 'searching' | 'active' | 'rating' | 'history';
 interface Props { userId: number }
 
@@ -66,6 +73,33 @@ export default function PassengerApp({ userId }: Props) {
   const [pinMoving, setPinMoving]     = useState(false);
   const [mapFly, setMapFly]           = useState<LatLng | null>(null);
   const geoSeqRef = useRef(0);
+  const [favHome, setFavHome] = useState<(LatLng & { address: string }) | null>(() => loadFav('home'));
+  const [favWork, setFavWork] = useState<(LatLng & { address: string }) | null>(() => loadFav('work'));
+  const [favAssign, setFavAssign] = useState<'home' | 'work' | null>(null);
+
+  function saveFav(kind: 'home' | 'work', point: LatLng & { address: string }) {
+    try { localStorage.setItem(`lattaxi_fav_${kind}`, JSON.stringify(point)); } catch { /* ignore */ }
+    if (kind === 'home') setFavHome(point); else setFavWork(point);
+  }
+
+  function applyFav(fav: (LatLng & { address: string })) {
+    haptic('light');
+    setDropoff(fav);
+    setMapFly({ lat: fav.lat, lng: fav.lng });
+    setFavAssign(null);
+    if (picking === 'dropoff') setPicking(null);
+  }
+
+  function startFavAssign(kind: 'home' | 'work') {
+    haptic('light');
+    setFavAssign(kind);
+    setPicking('dropoff');
+  }
+
+  function applyDropoffPoint(point: LatLng & { address: string }) {
+    setDropoff(point);
+    if (favAssign) { saveFav(favAssign, point); setFavAssign(null); }
+  }
 
   useEffect(() => {
     navigator.geolocation?.getCurrentPosition(
@@ -92,7 +126,7 @@ export default function PassengerApp({ userId }: Props) {
       setPickup({ ...pinPos, address: pinAddress });
       setPicking(dropoff ? null : 'dropoff');
     } else if (picking === 'dropoff') {
-      setDropoff({ ...pinPos, address: pinAddress });
+      applyDropoffPoint({ ...pinPos, address: pinAddress });
       setPicking(null);
     }
   }
@@ -336,7 +370,7 @@ export default function PassengerApp({ userId }: Props) {
                   }}
                 />
                 <button type="button"
-                  onClick={() => { haptic('light'); setPicking('pickup'); if (pickup) setMapFly({ lat: pickup.lat, lng: pickup.lng }); }}
+                  onClick={() => { haptic('light'); setFavAssign(null); setPicking('pickup'); if (pickup) setMapFly({ lat: pickup.lat, lng: pickup.lng }); }}
                   className={`flex-shrink-0 text-sm px-2.5 py-1.5 rounded-lg ${picking === 'pickup' ? 'bg-[#FFCC00]/20' : 'bg-[#ffffff0a]'}`}>
                   🎯
                 </button>
@@ -348,17 +382,42 @@ export default function PassengerApp({ userId }: Props) {
                   placeholder="Galamērķis"
                   value={dropoff?.address ?? ''}
                   onChange={(address, lat, lng) => {
-                    setDropoff({ lat, lng, address });
+                    applyDropoffPoint({ lat, lng, address });
                     setMapFly({ lat, lng });
                     if (picking === 'dropoff') setPicking(null);
                   }}
                 />
                 <button type="button"
-                  onClick={() => { haptic('light'); setPicking('dropoff'); if (dropoff) setMapFly({ lat: dropoff.lat, lng: dropoff.lng }); }}
+                  onClick={() => { haptic('light'); setFavAssign(null); setPicking('dropoff'); if (dropoff) setMapFly({ lat: dropoff.lat, lng: dropoff.lng }); }}
                   className={`flex-shrink-0 text-sm px-2.5 py-1.5 rounded-lg ${picking === 'dropoff' ? 'bg-[#FFCC00]/20' : 'bg-[#ffffff0a]'}`}>
                   🎯
                 </button>
               </div>
+            </div>
+
+            {/* favorites: Home / Work */}
+            <div className="flex gap-2">
+              {([['home', '🏠', 'Mājas', favHome], ['work', '💼', 'Darbs', favWork]] as const).map(([kind, icon, label, fav]) => (
+                <div key={kind}
+                  className={`flex-1 flex items-center bg-[#252836] rounded-2xl overflow-hidden ${favAssign === kind ? 'ring-2 ring-[#FFCC00]/60' : ''}`}>
+                  <button type="button"
+                    onClick={() => fav ? applyFav(fav) : startFavAssign(kind)}
+                    className="flex-1 flex items-center gap-2 px-3 py-2.5 min-w-0 active:bg-[#2f3347]">
+                    <span className="text-base flex-shrink-0">{icon}</span>
+                    <div className="text-left min-w-0">
+                      <div className="text-white text-xs font-semibold">{fav ? label : `+ ${label}`}</div>
+                      {fav && <div className="text-slate-500 text-[10px] truncate">{fav.address}</div>}
+                    </div>
+                  </button>
+                  {fav && (
+                    <button type="button"
+                      onClick={() => startFavAssign(kind)}
+                      className="flex-shrink-0 px-2.5 py-2.5 text-slate-500 text-xs active:bg-[#2f3347]">
+                      ✎
+                    </button>
+                  )}
+                </div>
+              ))}
             </div>
 
             {/* CTA */}
@@ -375,7 +434,11 @@ export default function PassengerApp({ userId }: Props) {
                   disabled={pinMoving || !pinAddress}
                   className="w-full bg-[#FFCC00] active:brightness-90 disabled:opacity-50 text-[#0f1117] font-bold py-4 rounded-2xl text-base shadow-lg shadow-yellow-500/20"
                 >
-                  {picking === 'pickup' ? 'Apstiprināt izejas punktu' : 'Apstiprināt galamērķi'}
+                  {picking === 'pickup'
+                    ? 'Apstiprināt izejas punktu'
+                    : favAssign
+                      ? `Saglabāt kā ${favAssign === 'home' ? '🏠 Mājas' : '💼 Darbs'}`
+                      : 'Apstiprināt galamērķi'}
                 </button>
                 <p className="text-center text-slate-500 text-xs">Pavelciet karti, lai precizētu punktu</p>
               </div>
@@ -406,6 +469,24 @@ export default function PassengerApp({ userId }: Props) {
                 ← Atpakaļ
               </button>
               <span className="text-slate-400 text-sm">{distKm} km · {durMin} min</span>
+            </div>
+
+            {/* editable route */}
+            <div className="bg-[#252836] rounded-2xl overflow-hidden">
+              <button type="button"
+                onClick={() => { haptic('light'); setStep('home'); setPicking('pickup'); if (pickup) setMapFly({ lat: pickup.lat, lng: pickup.lng }); }}
+                className="w-full flex items-center gap-3 px-4 py-3 border-b border-[#ffffff0f] active:bg-[#2f3347] text-left">
+                <div className="w-3 h-3 rounded-full bg-[#4ade80] border-2 border-[#1a1d27] flex-shrink-0" />
+                <span className="text-white text-sm flex-1 truncate">{pickup?.address}</span>
+                <span className="text-slate-500 text-xs flex-shrink-0">✎</span>
+              </button>
+              <button type="button"
+                onClick={() => { haptic('light'); setStep('home'); setPicking('dropoff'); if (dropoff) setMapFly({ lat: dropoff.lat, lng: dropoff.lng }); }}
+                className="w-full flex items-center gap-3 px-4 py-3 active:bg-[#2f3347] text-left">
+                <div className="w-3 h-3 rounded-sm bg-[#f87171] border-2 border-[#1a1d27] flex-shrink-0" />
+                <span className="text-white text-sm flex-1 truncate">{dropoff?.address}</span>
+                <span className="text-slate-500 text-xs flex-shrink-0">✎</span>
+              </button>
             </div>
 
             <p className="text-white font-bold text-lg">Izvēlies braucienu</p>
