@@ -112,22 +112,34 @@ export default function MapPicker({
     return () => { map.remove(); mapRef.current = null; };
   }, []);
 
-  // Update pickup marker
+  // Update pickup marker — move with setLatLng to avoid flicker
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
-    if (pickupRef.current) { pickupRef.current.remove(); pickupRef.current = null; }
-    if (pickupMarker) {
+    if (!pickupMarker) {
+      pickupRef.current?.remove();
+      pickupRef.current = null;
+      return;
+    }
+    if (pickupRef.current) {
+      pickupRef.current.setLatLng([pickupMarker.lat, pickupMarker.lng]);
+    } else {
       pickupRef.current = L.marker([pickupMarker.lat, pickupMarker.lng], { icon: pickupIcon }).addTo(map);
     }
   }, [pickupMarker]);
 
-  // Update dropoff marker
+  // Update dropoff marker — move with setLatLng to avoid flicker
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
-    if (dropoffRef.current) { dropoffRef.current.remove(); dropoffRef.current = null; }
-    if (dropoffMarker) {
+    if (!dropoffMarker) {
+      dropoffRef.current?.remove();
+      dropoffRef.current = null;
+      return;
+    }
+    if (dropoffRef.current) {
+      dropoffRef.current.setLatLng([dropoffMarker.lat, dropoffMarker.lng]);
+    } else {
       dropoffRef.current = L.marker([dropoffMarker.lat, dropoffMarker.lng], { icon: dropoffIcon }).addTo(map);
     }
   }, [dropoffMarker]);

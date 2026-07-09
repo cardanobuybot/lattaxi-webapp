@@ -102,6 +102,14 @@ export default function DriverApp({ telegramId, userName }: Props) {
   const [rejectionReason, setRejectionReason] = useState('');
   const [notice, setNotice] = useState<string | null>(null);
   const noticeTimerRef = useRef<number | null>(null);
+  const [onlineSecs, setOnlineSecs] = useState(0);
+
+  useEffect(() => {
+    if (!online) { setOnlineSecs(0); return; }
+    const start = Date.now();
+    const id = window.setInterval(() => setOnlineSecs(Math.floor((Date.now() - start) / 1000)), 1000);
+    return () => clearInterval(id);
+  }, [online]);
 
   function showNotice(msg: string) {
     setNotice(msg);
@@ -418,6 +426,9 @@ export default function DriverApp({ telegramId, userName }: Props) {
                 </div>
                 <p className="text-white font-semibold">Gaida pasūtījumus...</p>
                 <p className="text-slate-500 text-xs">Pasūtījums tiks paziņots automātiski</p>
+                <p className="text-[#FFCC00] text-xs font-mono tabular-nums">
+                  Tiešsaistē {String(Math.floor(onlineSecs / 3600)).padStart(2, '0')}:{String(Math.floor((onlineSecs % 3600) / 60)).padStart(2, '0')}:{String(onlineSecs % 60).padStart(2, '0')}
+                </p>
               </div>
             ) : (
               <div className="space-y-3">
