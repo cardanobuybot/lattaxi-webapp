@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import MapPicker from '../components/MapPicker';
 import AddressSearch from '../components/AddressSearch';
 import type { Category, QuoteResult, Ride, RideStatus, RideHistoryItem } from '../api';
-import { getQuote, requestRide, getRideStatus, cancelRide, getCancelPolicy, rateRide, getPassengerHistory } from '../api';
+import { getQuote, requestRide, getRideStatus, cancelRide, getCancelPolicy, rateRide, getPassengerHistory, getNearestDriverEta, fetchDriverPhoto } from '../api';
 import { haptic } from '../telegram';
 
 interface LatLng { lat: number; lng: number }
@@ -76,6 +76,8 @@ export default function PassengerApp({ userId }: Props) {
   const [favHome, setFavHome] = useState<(LatLng & { address: string }) | null>(() => loadFav('home'));
   const [favWork, setFavWork] = useState<(LatLng & { address: string }) | null>(() => loadFav('work'));
   const [favAssign, setFavAssign] = useState<'home' | 'work' | null>(null);
+  const [searchEta, setSearchEta] = useState<number | null>(null);
+  const [driverPhoto, setDriverPhoto] = useState<string | null>(null);
 
   function saveFav(kind: 'home' | 'work', point: LatLng & { address: string }) {
     try { localStorage.setItem(`lattaxi_fav_${kind}`, JSON.stringify(point)); } catch { /* ignore */ }
@@ -188,6 +190,32 @@ export default function PassengerApp({ userId }: Props) {
     }, 3000);
     return () => clearInterval(iv);
   }, [ride?.id, step]);
+
+  // nearest available driver ETA while searching
+  useEffect(() => {
+    if (step !== 'searching' || !pickup) { setSearchEta(null); return; }
+    let stale = false;
+    const load = () => getNearestDriverEta(pickup.lat, pickup.lng)
+      .then(r => { if (!stale && r.ok) setSearchEta(r.nearest_eta_minutes); })
+      .catch(() => { /* ignore */ });
+    load();
+    const iv = setInterval(load, 10000);
+    return () => { stale = true; clearInterval(iv); };
+  }, [step, pickup]);
+
+  // driver photo for the active ride card
+  useEffect(() => {
+    const driverId = rideStatus?.driver?.id;
+    if (!driverId) { setDriverPhoto(null); return; }
+    let stale = false;
+    let url: string | null = null;
+    fetchDriverPhoto(driverId).then(u => {
+      if (stale) { if (u) URL.revokeObjectURL(u); return; }
+      url = u;
+      setDriverPhoto(u);
+    });
+    return () => { stale = true; if (url) URL.revokeObjectURL(url); setDriverPhoto(null); };
+  }, [rideStatus?.driver?.id]);
 
   // give up on searching after 3 min if the ride is still unassigned
   useEffect(() => {
@@ -582,7 +610,9 @@ export default function PassengerApp({ userId }: Props) {
                 <span className="text-3xl relative z-10">🚕</span>
               </div>
               <p className="text-white font-bold text-lg mt-2">Meklē braucēju...</p>
-              <p className="text-slate-400 text-sm">Parasti līdz 2 minūtēm</p>
+              <p className="text-slate-400 text-sm">
+                {searchEta != null ? <>Tuvākais vadītājs ~<span className="text-[#FFCC00] font-semibold">{searchEta} min</span> attālumā</> : 'Parasti līdz 2 minūtēm'}
+              </p>
             </div>
 
             <div className="bg-[#252836] rounded-2xl p-4 space-y-3">
@@ -636,10 +666,14 @@ export default function PassengerApp({ userId }: Props) {
             {/* driver card */}
             {rideStatus.driver && (
               <div className="bg-[#252836] rounded-2xl p-4 flex items-center gap-4">
-                <div className="w-14 h-14 rounded-2xl bg-[#FFCC00]/15 flex items-center justify-center flex-shrink-0">
-                  <span className="text-[#FFCC00] font-extrabold text-xl">
-                    {rideStatus.driver.name?.trim().split(/\s+/).map(w => w[0]).slice(0, 2).join('').toUpperCase() || '🚕'}
-                  </span>
+                <div className="w-14 h-14 rounded-2xl bg-[#FFCC00]/15 flex items-center justify-center flex-shrink-0 overflow-hidden">
+                  {driverPhoto ? (
+                    <img src={driverPhoto} alt="" className="w-full h-full object-cover" />
+                  ) : (
+                    <span className="text-[#FFCC00] font-extrabold text-xl">
+                      {rideStatus.driver.name?.trim().split(/\s+/).map(w => w[0]).slice(0, 2).join('').toUpperCase() || '🚕'}
+                    </span>
+                  )}
                 </div>
                 <div className="flex-1 min-w-0">
                   <p className="text-white font-bold text-base truncate">{rideStatus.driver.name}</p>

@@ -30,6 +30,7 @@ export interface RideStatus {
   driver_location: { lat: number; lng: number } | null;
   driver_eta_minutes: number | null;
   driver?: {
+    id: number;
     name: string;
     car: string;
     car_number: string;
@@ -109,7 +110,36 @@ export async function requestRide(params: {
 }
 
 export async function getRideStatus(rideId: number): Promise<{ ok: boolean } & RideStatus> {
-  return get(`/rides/${rideId}/status`);
+  const data = await get<{
+    ok: boolean;
+    ride: { status: string };
+    driver: RideStatus['driver'] | null;
+    driver_location: RideStatus['driver_location'];
+    driver_eta_minutes: number | null;
+  }>(`/rides/status?ride_id=${rideId}`);
+  return {
+    ok: data.ok,
+    status: data.ride.status,
+    driver_location: data.driver_location,
+    driver_eta_minutes: data.driver_eta_minutes,
+    driver: data.driver ?? undefined,
+  };
+}
+
+export async function getNearestDriverEta(lat: number, lng: number): Promise<{
+  ok: boolean; online_drivers: number; nearest_eta_minutes: number | null;
+}> {
+  return get(`/rides/nearest-driver-eta?lat=${lat}&lng=${lng}`);
+}
+
+export async function fetchDriverPhoto(driverId: number): Promise<string | null> {
+  try {
+    const res = await fetch(`${API}/drivers/photo?driver_id=${driverId}`, { headers: authHeaders() });
+    if (!res.ok) return null;
+    return URL.createObjectURL(await res.blob());
+  } catch {
+    return null;
+  }
 }
 
 export async function getCancelPolicy(rideId: number): Promise<{
