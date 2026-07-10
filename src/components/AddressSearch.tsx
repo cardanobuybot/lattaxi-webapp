@@ -39,26 +39,39 @@ async function searchPhoton(q: string): Promise<Suggestion[]> {
     .filter((s: Suggestion) => s.display_name);
 }
 
+// Places API (New) — supports CORS and referer-restricted browser keys
 async function searchGooglePlaces(q: string): Promise<Suggestion[]> {
-  const res = await fetch(
-    `https://maps.googleapis.com/maps/api/place/autocomplete/json?input=${encodeURIComponent(q)}&location=56.946,24.105&radius=30000&language=lv&components=country:lv&key=${GMAPS_KEY}`
-  );
+  const res = await fetch('https://places.googleapis.com/v1/places:autocomplete', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Goog-Api-Key': GMAPS_KEY },
+    body: JSON.stringify({
+      input: q,
+      languageCode: 'lv',
+      includedRegionCodes: ['lv'],
+      locationBias: { circle: { center: { latitude: 56.946, longitude: 24.105 }, radius: 30000 } },
+    }),
+  });
+  if (!res.ok) throw new Error(`places autocomplete ${res.status}`);
   const data = await res.json();
-  if (!data.predictions) return [];
+  const preds: { placePrediction?: { placeId: string; text?: { text: string } } }[] = data.suggestions || [];
   const details = await Promise.all(
-    data.predictions.slice(0, 5).map(async (p: { place_id: string; description: string }) => {
-      const r = await fetch(
-        `https://maps.googleapis.com/maps/api/place/details/json?place_id=${p.place_id}&fields=geometry,formatted_address&key=${GMAPS_KEY}`
-      );
+    preds.slice(0, 5).map(async (s) => {
+      const p = s.placePrediction;
+      if (!p) return null;
+      const r = await fetch(`https://places.googleapis.com/v1/places/${p.placeId}`, {
+        headers: { 'X-Goog-Api-Key': GMAPS_KEY, 'X-Goog-FieldMask': 'location,formattedAddress' },
+      });
+      if (!r.ok) return null;
       const d = await r.json();
+      if (d.location?.latitude == null) return null;
       return {
-        display_name: p.description,
-        lat: String(d.result?.geometry?.location?.lat ?? ''),
-        lon: String(d.result?.geometry?.location?.lng ?? ''),
+        display_name: p.text?.text || d.formattedAddress || '',
+        lat: String(d.location.latitude),
+        lon: String(d.location.longitude),
       };
     })
   );
-  return details.filter(s => s.lat);
+  return details.filter((s): s is Suggestion => !!s && !!s.display_name);
 }
 
 const RECENTS_KEY = 'lattaxi_recent_addresses';
@@ -89,7 +102,11 @@ export default function AddressSearch({ placeholder, value, onChange }: Props) {
     timer.current = setTimeout(async () => {
       setLoading(true);
       try {
-        const results = GMAPS_KEY ? await searchGooglePlaces(q) : await searchPhoton(q);
+        let results: Suggestion[] = [];
+        if (GMAPS_KEY) {
+          try { results = await searchGooglePlaces(q); } catch { /* fall through to Photon */ }
+        }
+        if (results.length === 0) results = await searchPhoton(q);
         setSuggestions(results);
         setOpen(true);
       } catch { /* ignore */ } finally {
