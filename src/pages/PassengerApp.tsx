@@ -1,8 +1,9 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import MapPicker from '../components/MapPicker';
 import AddressSearch from '../components/AddressSearch';
+import StripePaymentForm from '../components/StripePaymentForm';
 import type { Category, QuoteResult, Ride, RideStatus, RideHistoryItem } from '../api';
-import { getQuote, requestRide, getRideStatus, cancelRide, getCancelPolicy, rateRide, getPassengerHistory, getNearestDriverEta, fetchDriverPhoto } from '../api';
+import { getQuote, requestRide, getRideStatus, cancelRide, getCancelPolicy, rateRide, getPassengerHistory, getNearestDriverEta, fetchDriverPhoto, createPaymentIntent, getPaymentStatus } from '../api';
 import { haptic } from '../telegram';
 
 interface LatLng { lat: number; lng: number }
@@ -33,7 +34,7 @@ function loadFav(kind: 'home' | 'work'): (LatLng & { address: string }) | null {
   } catch { return null; }
 }
 
-type Step = 'home' | 'confirm' | 'searching' | 'active' | 'rating' | 'history';
+type Step = 'home' | 'confirm' | 'payment' | 'searching' | 'active' | 'rating' | 'history';
 interface Props { userId: number }
 
 const CATS: { id: Category; label: string; desc: string; icon: string }[] = [
@@ -78,6 +79,11 @@ export default function PassengerApp({ userId }: Props) {
   const [favAssign, setFavAssign] = useState<'home' | 'work' | null>(null);
   const [searchEta, setSearchEta] = useState<number | null>(null);
   const [driverPhoto, setDriverPhoto] = useState<string | null>(null);
+  const [stripeClientSecret, setStripeClientSecret] = useState<string | null>(null);
+  const [stripePublishableKey, setStripePublishableKey] = useState<string | null>(null);
+  const [stripeAmountCents, setStripeAmountCents] = useState<number>(0);
+  const [payError, setPayError] = useState<string | null>(null);
+  const [payPolling, setPayPolling] = useState(false);
 
   function saveFav(kind: 'home' | 'work', point: LatLng & { address: string }) {
     try { localStorage.setItem(`lattaxi_fav_${kind}`, JSON.stringify(point)); } catch { /* ignore */ }
@@ -229,6 +235,27 @@ export default function PassengerApp({ userId }: Props) {
     return () => clearTimeout(to);
   }, [ride?.id, step]);
 
+  const startPaymentPolling = useCallback((rideId: number) => {
+    setPayPolling(true);
+    const start = Date.now();
+    const iv = setInterval(async () => {
+      try {
+        const ps = await getPaymentStatus(rideId);
+        if (ps.payment_status === 'authorized') {
+          clearInterval(iv);
+          setPayPolling(false);
+          setStep('searching');
+        } else if (Date.now() - start > 60_000) {
+          clearInterval(iv);
+          setPayPolling(false);
+          setPayError('Maksājums netika apstiprināts. Mēģiniet vēlreiz.');
+        }
+      } catch {
+        // silent, keep polling
+      }
+    }, 2000);
+  }, []);
+
   async function handleBook() {
     if (!pickup || !dropoff) return;
     setBooking(true);
@@ -248,16 +275,46 @@ export default function PassengerApp({ userId }: Props) {
         route_polyline:         quote?.encodedPolyline,
         passenger_comment:      comment || undefined,
       });
-      if (res.ok) {
-        rideStatusRef.current = null;
-        setCancelError(null);
-        setRide(res.ride); setStep('searching');
-      } else {
+      if (!res.ok) {
         setBookError(res.error || 'Neizdevās izveidot pasūtījumu. Mēģiniet vēlreiz.');
+        return;
       }
+      rideStatusRef.current = null;
+      setCancelError(null);
+      setRide(res.ride);
+
+      // Try to set up payment; fall back to searching if disabled or key missing
+      try {
+        const pi = await createPaymentIntent(res.ride.id);
+        if (pi.ok && pi.client_secret && pi.publishable_key) {
+          setStripeClientSecret(pi.client_secret);
+          setStripePublishableKey(pi.publishable_key);
+          setStripeAmountCents(pi.amount);
+          setPayError(null);
+          setStep('payment');
+          return;
+        }
+      } catch { /* payments disabled or not configured — proceed without payment */ }
+
+      setStep('searching');
     } catch (e) {
       setBookError(e instanceof Error ? e.message : 'Neizdevās izveidot pasūtījumu. Mēģiniet vēlreiz.');
     } finally { setBooking(false); }
+  }
+
+  async function handlePaymentRetry() {
+    if (!ride) return;
+    setPayError(null);
+    try {
+      const pi = await createPaymentIntent(ride.id);
+      if (pi.ok && pi.client_secret && pi.publishable_key) {
+        setStripeClientSecret(pi.client_secret);
+        setStripePublishableKey(pi.publishable_key);
+        setStripeAmountCents(pi.amount);
+      }
+    } catch (e) {
+      setPayError(e instanceof Error ? e.message : 'Neizdevās ielādēt maksājumu.');
+    }
   }
 
   async function handleCancel() {
@@ -596,6 +653,57 @@ export default function PassengerApp({ userId }: Props) {
               className="w-full bg-[#FFCC00] active:brightness-90 disabled:opacity-50 text-[#0f1117] font-bold py-4 rounded-2xl text-base shadow-lg shadow-yellow-500/20"
             >
               {booking ? 'Rezervē...' : `Pasūtīt ${CATS.find(c => c.id === category)?.label}`}
+            </button>
+          </div>
+        )}
+
+        {/* ════ PAYMENT ════ */}
+        {step === 'payment' && stripeClientSecret && stripePublishableKey && (
+          <div className="px-4 pb-8 space-y-5">
+            <div className="flex flex-col items-center py-4 gap-1">
+              <span className="text-3xl">💳</span>
+              <p className="text-white font-bold text-lg mt-1">Maksājuma apstiprināšana</p>
+              <p className="text-slate-400 text-xs text-center">
+                Līdzekļi tiks rezervēti un norakstīti tikai pēc brauciena
+              </p>
+            </div>
+            <div className="bg-[#252836] rounded-2xl p-4 space-y-2">
+              <div className="flex justify-between text-sm">
+                <span className="text-slate-400">No</span>
+                <span className="text-white text-right max-w-[65%]">{pickup?.address}</span>
+              </div>
+              <div className="h-px bg-[#ffffff0a]" />
+              <div className="flex justify-between text-sm">
+                <span className="text-slate-400">Uz</span>
+                <span className="text-white text-right max-w-[65%]">{dropoff?.address}</span>
+              </div>
+              <div className="h-px bg-[#ffffff0a]" />
+              <div className="flex justify-between text-sm">
+                <span className="text-slate-400">Rezervēts depozīts</span>
+                <span className="text-[#FFCC00] font-bold">€{(stripeAmountCents / 100).toFixed(2)}</span>
+              </div>
+            </div>
+
+            {payPolling ? (
+              <div className="flex flex-col items-center gap-3 py-4">
+                <div className="w-8 h-8 border-2 border-[#FFCC00] border-t-transparent rounded-full animate-spin" />
+                <p className="text-slate-400 text-sm">Gaida maksājuma apstiprinājumu...</p>
+              </div>
+            ) : (
+              <StripePaymentForm
+                clientSecret={stripeClientSecret}
+                publishableKey={stripePublishableKey}
+                amountCents={stripeAmountCents}
+                onSuccess={() => { if (ride) startPaymentPolling(ride.id); }}
+                onError={msg => setPayError(msg)}
+                onRetry={handlePaymentRetry}
+                payError={payError}
+              />
+            )}
+
+            <button onClick={handleCancel} disabled={cancelling}
+              className="w-full bg-[#252836] active:bg-[#2f3347] disabled:opacity-50 text-red-400 font-semibold py-3.5 rounded-2xl text-sm border border-red-500/20">
+              {cancelling ? '...' : 'Atcelt pasūtījumu'}
             </button>
           </div>
         )}

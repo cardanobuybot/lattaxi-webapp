@@ -43,6 +43,7 @@ interface TelegramWebApp {
     notificationOccurred(type: 'error' | 'success' | 'warning'): void;
   };
   sendData(data: string): void;
+  openLink(url: string): void;
 }
 
 export const tg = window.Telegram?.WebApp;

@@ -226,3 +226,51 @@ export async function reportNoShow(rideId: number, driverTelegramId: number) {
 export async function getWaitFeeStatus(rideId: number): Promise<{ wait_minutes: number; wait_fee: number; free_minutes_left: number }> {
   return get(`/rides/${rideId}/wait-status`);
 }
+
+export interface PaymentIntentResult {
+  ok: boolean;
+  payment_intent_id: string;
+  client_secret: string;
+  publishable_key: string | null;
+  amount: number;
+  currency: string;
+  status: string;
+  error?: string;
+}
+
+export async function createPaymentIntent(rideId: number): Promise<PaymentIntentResult> {
+  const res = await fetch(`${API}/rides/payment-intent`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ ride_id: rideId }),
+  });
+  return res.json();
+}
+
+export async function getPaymentStatus(rideId: number): Promise<{ ok: boolean; payment_status: string; authorized_amount_cents: number | null }> {
+  const res = await fetch(`${API}/rides/payment-status?ride_id=${rideId}`, { headers: authHeaders() });
+  return res.json();
+}
+
+export interface StripeDriverStatus {
+  ok: boolean;
+  has_account: boolean;
+  payouts_ready: boolean;
+  details_submitted?: boolean;
+  transfers_capability?: string;
+  error?: string;
+}
+
+export async function getStripeDriverStatus(): Promise<StripeDriverStatus> {
+  const res = await fetch(`${API}/drivers/stripe/status`, { headers: authHeaders() });
+  return res.json();
+}
+
+export async function createStripeOnboardLink(): Promise<{ ok: boolean; url?: string; error?: string }> {
+  const res = await fetch(`${API}/drivers/stripe/onboard`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({}),
+  });
+  return res.json();
+}

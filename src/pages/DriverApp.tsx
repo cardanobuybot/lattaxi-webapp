@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import MapPicker from '../components/MapPicker';
-import type { Category, RideHistoryItem } from '../api';
-import { registerDriver, setDriverStatus, getRideStatus, getDriverHistory, getDriverEarnings, reportNoShow, authHeaders } from '../api';
+import type { Category, RideHistoryItem, StripeDriverStatus } from '../api';
+import { registerDriver, setDriverStatus, getRideStatus, getDriverHistory, getDriverEarnings, reportNoShow, authHeaders, getStripeDriverStatus, createStripeOnboardLink } from '../api';
 import { haptic } from '../telegram';
 
 const API = import.meta.env.VITE_API_URL ?? 'https://api.lattaxi.lv';
@@ -103,6 +103,9 @@ export default function DriverApp({ telegramId, userName }: Props) {
   const [notice, setNotice] = useState<string | null>(null);
   const noticeTimerRef = useRef<number | null>(null);
   const [onlineSecs, setOnlineSecs] = useState(0);
+  const [stripeStatus, setStripeStatus] = useState<StripeDriverStatus | null>(null);
+  const [stripeLoading, setStripeLoading] = useState(false);
+  const [stripeError, setStripeError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!online) { setOnlineSecs(0); return; }
@@ -115,6 +118,28 @@ export default function DriverApp({ telegramId, userName }: Props) {
     setNotice(msg);
     if (noticeTimerRef.current !== null) clearTimeout(noticeTimerRef.current);
     noticeTimerRef.current = window.setTimeout(() => setNotice(null), 4000);
+  }
+
+  useEffect(() => {
+    if (step !== 'dashboard') return;
+    getStripeDriverStatus().then(s => setStripeStatus(s)).catch(() => {});
+  }, [step]);
+
+  async function handleStripeOnboard() {
+    setStripeLoading(true);
+    setStripeError(null);
+    try {
+      const res = await createStripeOnboardLink();
+      if (res.ok && res.url) {
+        window.Telegram?.WebApp?.openLink(res.url);
+      } else {
+        setStripeError(res.error || 'Neizdevās izveidot saiti.');
+      }
+    } catch (e) {
+      setStripeError(e instanceof Error ? e.message : 'Kļūda.');
+    } finally {
+      setStripeLoading(false);
+    }
   }
 
   useEffect(() => {
@@ -446,6 +471,31 @@ export default function DriverApp({ telegramId, userName }: Props) {
                     🕐 Vēsture
                   </button>
                 </div>
+              </div>
+            )}
+
+            {/* Stripe payouts section */}
+            {stripeStatus !== null && (
+              <div className="mt-3 bg-[#252836] rounded-2xl p-4">
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-2">
+                    <span className="text-base">💸</span>
+                    <span className="text-white text-sm font-semibold">Izmaksu konts</span>
+                  </div>
+                  {stripeStatus.has_account && (
+                    <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${stripeStatus.payouts_ready ? 'bg-green-500/15 text-green-400' : 'bg-yellow-500/15 text-yellow-300'}`}>
+                      {stripeStatus.payouts_ready ? 'Aktīvs' : 'Nepabeidzts'}
+                    </span>
+                  )}
+                </div>
+                {stripeError && <p className="text-red-300 text-xs mb-2">{stripeError}</p>}
+                <button
+                  onClick={handleStripeOnboard}
+                  disabled={stripeLoading}
+                  className="w-full bg-[#1a1d27] active:bg-[#0f1117] disabled:opacity-50 text-[#FFCC00] font-semibold py-2.5 rounded-xl text-sm"
+                >
+                  {stripeLoading ? 'Ielādē...' : stripeStatus.has_account ? 'Pārvaldīt kontu' : 'Pievienot izmaksu kontu'}
+                </button>
               </div>
             )}
           </div>
