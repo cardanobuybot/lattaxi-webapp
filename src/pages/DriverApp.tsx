@@ -1,8 +1,32 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, Component, type ReactNode } from 'react';
 import MapPicker from '../components/MapPicker';
 import type { Category, RideHistoryItem, StripeDriverStatus } from '../api';
 import { registerDriver, setDriverStatus, getRideStatus, getDriverHistory, getDriverEarnings, reportNoShow, authHeaders, getStripeDriverStatus, createStripeOnboardLink } from '../api';
 import { haptic } from '../telegram';
+
+class DriverErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
+  constructor(props: { children: ReactNode }) {
+    super(props);
+    this.state = { error: null };
+  }
+  static getDerivedStateFromError(error: Error) { return { error }; }
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="flex items-center justify-center h-full bg-[#0f1117]">
+          <div className="text-center space-y-4 px-8 max-w-xs">
+            <div className="text-slate-400 text-sm">Neparedzēta kļūda. Mēģiniet vēlreiz.</div>
+            <button onClick={() => this.setState({ error: null })}
+              className="bg-[#FFCC00] text-[#0f1117] font-bold py-3 px-6 rounded-2xl text-sm w-full">
+              Mēģināt vēlreiz
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 const API = import.meta.env.VITE_API_URL ?? 'https://api.lattaxi.lv';
 
@@ -79,7 +103,7 @@ async function respondToOffer(offerId: number, accept: boolean, telegramId: numb
   }
 }
 
-export default function DriverApp({ telegramId, userName }: Props) {
+function DriverAppInner({ telegramId, userName }: Props) {
   const [step, setStep]           = useState<DriverStep>('register');
   const [online, setOnline]       = useState(false);
   const [category, setCategory]   = useState<Category>('economy');
@@ -110,6 +134,9 @@ export default function DriverApp({ telegramId, userName }: Props) {
   const [stripeStatus, setStripeStatus] = useState<StripeDriverStatus | null>(null);
   const [stripeLoading, setStripeLoading] = useState(false);
   const [stripeError, setStripeError] = useState<string | null>(null);
+  const [loadingInit, setLoadingInit] = useState(true);
+  const [initError, setInitError] = useState<{ endpoint: string; status: number } | null>(null);
+  const [initAttempt, setInitAttempt] = useState(0);
 
   useEffect(() => {
     if (!online) { setOnlineSecs(0); return; }
@@ -216,16 +243,34 @@ export default function DriverApp({ telegramId, userName }: Props) {
   }
 
   useEffect(() => {
+    setLoadingInit(true);
+    setInitError(null);
+    const endpoint = `${API}/drivers/me?telegram_id=${telegramId}`;
     async function checkRegistration() {
-      const res = await fetch(`${API}/drivers/me?telegram_id=${telegramId}`, { headers: authHeaders() }).then(r => r.json()).catch(() => null);
-      if (!res || !res.ok) return; // not registered, stay on register
-      if (res.driver.verification_status === 'approved') setStep('dashboard');
-      else if (res.driver.verification_status === 'rejected') { setRejectionReason(res.driver.rejection_reason || ''); setStep('rejected'); }
-      else setStep('pending');
-      applyDriverData(res.driver);
+      try {
+        const r = await fetch(endpoint, { headers: authHeaders() });
+        if (!r.ok) {
+          if (r.status === 404) {
+            // Not registered — stay on register step
+            return;
+          }
+          setInitError({ endpoint, status: r.status });
+          return;
+        }
+        const res = await r.json().catch(() => null);
+        if (!res || !res.ok) return; // not registered
+        if (res.driver.verification_status === 'approved') setStep('dashboard');
+        else if (res.driver.verification_status === 'rejected') { setRejectionReason(res.driver.rejection_reason || ''); setStep('rejected'); }
+        else setStep('pending');
+        applyDriverData(res.driver);
+      } catch {
+        setInitError({ endpoint, status: 0 });
+      } finally {
+        setLoadingInit(false);
+      }
     }
     checkRegistration();
-  }, []); // run once on mount
+  }, [initAttempt]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Poll status every 10 s while dashboard is visible (pick up bot-side Online/Offline changes)
   useEffect(() => {
@@ -329,6 +374,34 @@ export default function DriverApp({ telegramId, userName }: Props) {
     } finally {
       setNoShowLoading(false);
     }
+  }
+
+  if (loadingInit) {
+    return (
+      <div className="flex items-center justify-center h-full bg-[#0f1117]">
+        <div className="text-center space-y-3">
+          <div className="text-4xl animate-spin">🚕</div>
+          <div className="text-slate-400 text-sm">Ielādē...</div>
+        </div>
+      </div>
+    );
+  }
+
+  if (initError) {
+    return (
+      <div className="flex items-center justify-center h-full bg-[#0f1117]">
+        <div className="text-center space-y-4 px-8 max-w-xs">
+          <div className="text-slate-400 text-sm">
+            Neizdevās iegūt datus.{initError.status > 0 ? ` (HTTP ${initError.status})` : ''}
+          </div>
+          <div className="text-slate-600 text-xs break-all">{initError.endpoint}</div>
+          <button onClick={() => setInitAttempt(a => a + 1)}
+            className="bg-[#FFCC00] text-[#0f1117] font-bold py-3 px-6 rounded-2xl text-sm w-full">
+            Mēģināt vēlreiz
+          </button>
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -890,5 +963,13 @@ function ActiveStatusChip({ status }: { status: string }) {
       <div className={`w-2 h-2 rounded-full animate-pulse ${s.dot}`} />
       <span className="text-sm font-semibold">{s.label}</span>
     </div>
+  );
+}
+
+export default function DriverApp(props: Props) {
+  return (
+    <DriverErrorBoundary>
+      <DriverAppInner {...props} />
+    </DriverErrorBoundary>
   );
 }
