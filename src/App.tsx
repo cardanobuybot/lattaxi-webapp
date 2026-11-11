@@ -82,6 +82,22 @@ function ErrorScreen({ onRetry }: { onRetry: () => void }) {
   );
 }
 
+function StripeReturnScreen() {
+  return (
+    <div className="flex items-center justify-center h-full bg-slate-900">
+      <div className="text-center space-y-5 px-8 max-w-xs">
+        <div className="text-5xl">✅</div>
+        <p className="text-white font-semibold text-lg">Izmaksu konts saglabāts.</p>
+        <p className="text-slate-400 text-sm">Aizveriet šo logu un atgriezieties Telegram.</p>
+        <a href="https://t.me/LatTaxiDriverBot"
+          className="block bg-[#FFCC00] text-[#0f1117] font-bold py-3 px-6 rounded-2xl text-sm mt-2">
+          Atvērt LatTaxiDriverBot
+        </a>
+      </div>
+    </div>
+  );
+}
+
 function NoTelegramScreen() {
   const isDriverRoute = window.location.pathname.startsWith('/driver');
   const botHandle = isDriverRoute ? '@LatTaxiDriverBot' : '@LatTaxiBot';
@@ -123,6 +139,9 @@ function MainApp() {
 }
 
 export default function App() {
+  if (window.location.pathname === '/stripe-return') {
+    return <StripeReturnScreen />;
+  }
   if (window.location.pathname.startsWith('/admin')) {
     return <AdminApp />;
   }

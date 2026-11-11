@@ -84,7 +84,11 @@ export default function DriverApp({ telegramId, userName }: Props) {
   const [online, setOnline]       = useState(false);
   const [category, setCategory]   = useState<Category>('economy');
   const [car, setCar]             = useState('');
+  const [carMake, setCarMake]     = useState('');
+  const [carModel, setCarModel]   = useState('');
+  const [carColor, setCarColor]   = useState('');
   const [carNumber, setCarNumber] = useState('');
+  const [driverName, setDriverName] = useState('');
   const [offer, setOffer]         = useState<OfferData | null>(null);
   const [activeRideId, setActiveRideId] = useState<number | null>(null);
   const [rideStatus, setRideStatus]     = useState<string>('');
@@ -200,6 +204,17 @@ export default function DriverApp({ telegramId, userName }: Props) {
     return () => clearInterval(iv);
   }, [rideStatus, activeRideId]);
 
+  function applyDriverData(driver: Record<string, unknown>) {
+    setCar((driver.car as string) || '');
+    setCarMake((driver.car_make as string) || '');
+    setCarModel((driver.car_model as string) || '');
+    setCarColor((driver.car_color as string) || '');
+    setCarNumber((driver.car_number as string) || '');
+    setDriverName((driver.name as string) || '');
+    setCategory((driver.category as Category) || 'economy');
+    if (typeof driver.is_online === 'boolean') setOnline(driver.is_online);
+  }
+
   useEffect(() => {
     async function checkRegistration() {
       const res = await fetch(`${API}/drivers/me?telegram_id=${telegramId}`, { headers: authHeaders() }).then(r => r.json()).catch(() => null);
@@ -207,14 +222,21 @@ export default function DriverApp({ telegramId, userName }: Props) {
       if (res.driver.verification_status === 'approved') setStep('dashboard');
       else if (res.driver.verification_status === 'rejected') { setRejectionReason(res.driver.rejection_reason || ''); setStep('rejected'); }
       else setStep('pending');
-      // also update car/category/online state from server
-      setCar(res.driver.car || '');
-      setCarNumber(res.driver.car_number || '');
-      setCategory(res.driver.category || 'economy');
-      if (typeof res.driver.is_online === 'boolean') setOnline(res.driver.is_online);
+      applyDriverData(res.driver);
     }
     checkRegistration();
   }, []); // run once on mount
+
+  // Poll status every 10 s while dashboard is visible (pick up bot-side Online/Offline changes)
+  useEffect(() => {
+    if (step !== 'dashboard') return;
+    const iv = setInterval(async () => {
+      const res = await fetch(`${API}/drivers/me?telegram_id=${telegramId}`, { headers: authHeaders() })
+        .then(r => r.json()).catch(() => null);
+      if (res?.ok && typeof res.driver?.is_online === 'boolean') setOnline(res.driver.is_online);
+    }, 10000);
+    return () => clearInterval(iv);
+  }, [step, telegramId]);
 
   async function handleRegister() {
     if (!car || !carNumber) return;
@@ -426,9 +448,11 @@ export default function DriverApp({ telegramId, userName }: Props) {
             {/* driver info row */}
             <div className="flex items-center justify-between mb-4">
               <div>
-                <p className="text-white font-bold text-base">{userName}</p>
+                <p className="text-white font-bold text-base">{driverName || userName}</p>
                 <p className="text-slate-500 text-xs capitalize mt-0.5">
-                  {CATS.find(c => c.id === category)?.icon} {category} · {car || '—'}
+                  {CATS.find(c => c.id === category)?.icon} {category}
+                  {' · '}{car || [carMake, carModel, carColor].filter(Boolean).join(' ') || '—'}
+                  {carNumber ? <span className="uppercase tracking-widest"> · {carNumber}</span> : null}
                 </p>
               </div>
               <button onClick={toggleOnline}
