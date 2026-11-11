@@ -83,10 +83,12 @@ function ErrorScreen({ onRetry }: { onRetry: () => void }) {
 }
 
 function NoTelegramScreen() {
+  const isDriverRoute = window.location.pathname.startsWith('/driver');
+  const botHandle = isDriverRoute ? '@LatTaxiDriverBot' : '@LatTaxiBot';
   return (
     <div className="flex items-center justify-center h-full bg-slate-900">
       <div className="text-center text-slate-400 text-sm px-8">
-        Atveriet lietotni caur Telegram botu @LatTaxiBot
+        Atveriet lietotni caur Telegram botu {botHandle}
       </div>
     </div>
   );
