@@ -91,10 +91,15 @@ export default function MapPicker({
       center: [center?.lat ?? DEFAULT_CENTER.lat, center?.lng ?? DEFAULT_CENTER.lng],
       zoom: 13,
       zoomControl: false,
-      attributionControl: false,
+      attributionControl: true,
     });
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+    const cartoKey = import.meta.env.VITE_CARTO_API_KEY;
+    const cartoUrl = cartoKey
+      ? `https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png?key=${cartoKey}`
+      : 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png';
+    L.tileLayer(cartoUrl, {
       maxZoom: 19,
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
     }).addTo(map);
     map.on('click', (e) => {
       if (!interactiveRef.current) return;
