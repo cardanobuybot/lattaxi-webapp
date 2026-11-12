@@ -252,6 +252,15 @@ export async function getPaymentStatus(rideId: number): Promise<{ ok: boolean; p
   return res.json();
 }
 
+export async function createPaymentCheckout(rideId: number): Promise<{ ok: boolean; url?: string; session_id?: string; error?: string; pi_status?: string }> {
+  const res = await fetch(`${API}/rides/payment-checkout`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ ride_id: rideId }),
+  });
+  return res.json();
+}
+
 export interface StripeDriverStatus {
   ok: boolean;
   has_account: boolean;

@@ -102,6 +102,31 @@ function StripeReturnScreen() {
   );
 }
 
+function PaymentReturnScreen() {
+  const params = new URLSearchParams(window.location.search);
+  const status = params.get('status');
+  const isSuccess = status === 'success';
+  return (
+    <div className="flex items-center justify-center h-full bg-slate-900">
+      <div className="text-center space-y-5 px-8 max-w-xs">
+        <div className="text-5xl">{isSuccess ? '✅' : '↩️'}</div>
+        <p className="text-white font-semibold text-lg">
+          {isSuccess ? 'Maksājums apstiprināts!' : 'Maksājums atcelts'}
+        </p>
+        <p className="text-slate-400 text-sm">
+          {isSuccess
+            ? 'Aizveriet šo logu un atgriezieties Telegram, lai turpinātu pasūtījumu.'
+            : 'Aizveriet šo logu un atgriezieties Telegram, lai izvēlētos citu maksājuma veidu.'}
+        </p>
+        <a href="https://t.me/LatTaxiBot"
+          className="block bg-[#FFCC00] text-[#0f1117] font-bold py-3 px-6 rounded-2xl text-sm mt-2">
+          Atvērt LatTaxiBot
+        </a>
+      </div>
+    </div>
+  );
+}
+
 function NoTelegramScreen() {
   const isDriverRoute = window.location.pathname.startsWith('/driver');
   const botHandle = isDriverRoute ? '@LatTaxiDriverBot' : '@LatTaxiBot';
@@ -145,6 +170,9 @@ function MainApp() {
 export default function App() {
   if (window.location.pathname === '/stripe-return') {
     return <StripeReturnScreen />;
+  }
+  if (window.location.pathname === '/payment-return') {
+    return <PaymentReturnScreen />;
   }
   if (window.location.pathname.startsWith('/admin')) {
     return <AdminApp />;

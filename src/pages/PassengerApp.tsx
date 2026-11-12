@@ -3,8 +3,10 @@ import MapPicker from '../components/MapPicker';
 import AddressSearch from '../components/AddressSearch';
 import StripePaymentForm from '../components/StripePaymentForm';
 import type { Category, QuoteResult, Ride, RideStatus, RideHistoryItem } from '../api';
-import { getQuote, requestRide, getRideStatus, cancelRide, getCancelPolicy, rateRide, getPassengerHistory, getNearestDriverEta, fetchDriverPhoto, createPaymentIntent, getPaymentStatus } from '../api';
-import { haptic } from '../telegram';
+import { getQuote, requestRide, getRideStatus, cancelRide, getCancelPolicy, rateRide, getPassengerHistory, getNearestDriverEta, fetchDriverPhoto, createPaymentIntent, getPaymentStatus, createPaymentCheckout } from '../api';
+import { haptic, tg } from '../telegram';
+
+const CHECKOUT_WALLETS_ENABLED = String(import.meta.env.VITE_CHECKOUT_WALLETS_ENABLED || '').toLowerCase() === 'true';
 
 interface LatLng { lat: number; lng: number }
 
@@ -84,6 +86,10 @@ export default function PassengerApp({ userId }: Props) {
   const [stripeAmountCents, setStripeAmountCents] = useState<number>(0);
   const [payError, setPayError] = useState<string | null>(null);
   const [payPolling, setPayPolling] = useState(false);
+  const [walletCheckoutPending, setWalletCheckoutPending] = useState(false);
+  const [walletCheckoutError, setWalletCheckoutError] = useState<string | null>(null);
+  const walletPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const walletPollDeadlineRef = useRef<number>(0);
 
   function saveFav(kind: 'home' | 'work', point: LatLng & { address: string }) {
     try { localStorage.setItem(`lattaxi_fav_${kind}`, JSON.stringify(point)); } catch { /* ignore */ }
@@ -255,6 +261,82 @@ export default function PassengerApp({ userId }: Props) {
       }
     }, 2000);
   }, []);
+
+  const stopWalletPolling = useCallback(() => {
+    if (walletPollRef.current) { clearInterval(walletPollRef.current); walletPollRef.current = null; }
+    setWalletCheckoutPending(false);
+  }, []);
+
+  const checkWalletStatus = useCallback(async (rideId: number) => {
+    try {
+      const ps = await getPaymentStatus(rideId);
+      if (ps.payment_status === 'authorized') {
+        stopWalletPolling();
+        setPayError(null);
+        setWalletCheckoutError(null);
+        setStep('searching');
+      } else if (Date.now() > walletPollDeadlineRef.current) {
+        stopWalletPolling();
+        setWalletCheckoutError('Maksājums nav apstiprināts. Mēģiniet vēlreiz vai izvēlieties karti.');
+      }
+    } catch { /* keep polling */ }
+  }, [stopWalletPolling]);
+
+  const startWalletPolling = useCallback((rideId: number) => {
+    stopWalletPolling();
+    walletPollDeadlineRef.current = Date.now() + 5 * 60_000;
+    setWalletCheckoutPending(true);
+    setWalletCheckoutError(null);
+    walletPollRef.current = setInterval(() => { checkWalletStatus(rideId); }, 2000);
+  }, [checkWalletStatus, stopWalletPolling]);
+
+  // When the user returns to the Mini App from the external browser,
+  // trigger an immediate status check so they don't wait a full poll tick.
+  useEffect(() => {
+    if (!ride) return;
+    const onVis = () => {
+      if (document.visibilityState === 'visible' && walletCheckoutPending) {
+        checkWalletStatus(ride.id);
+      }
+    };
+    document.addEventListener('visibilitychange', onVis);
+    return () => document.removeEventListener('visibilitychange', onVis);
+  }, [ride, walletCheckoutPending, checkWalletStatus]);
+
+  useEffect(() => () => stopWalletPolling(), [stopWalletPolling]);
+
+  async function handleWalletCheckout() {
+    if (!ride) return;
+    haptic('medium');
+    setWalletCheckoutError(null);
+    try {
+      const r = await createPaymentCheckout(ride.id);
+      if (!r.ok || !r.url) {
+        setWalletCheckoutError(r.error === 'payment_already_in_progress'
+          ? 'Maksājums jau ir uzsākts. Mēģiniet vēlreiz.'
+          : 'Neizdevās atvērt Apple Pay / Google Pay. Mēģiniet vēlreiz.');
+        return;
+      }
+      startWalletPolling(ride.id);
+      if (tg && typeof tg.openLink === 'function') {
+        tg.openLink(r.url);
+      } else {
+        window.open(r.url, '_blank', 'noopener');
+      }
+    } catch {
+      setWalletCheckoutError('Savienojuma kļūda. Mēģiniet vēlreiz.');
+    }
+  }
+
+  function handleWalletCheckoutRetry() {
+    setWalletCheckoutError(null);
+    void handleWalletCheckout();
+  }
+
+  function handleWalletFallbackToCard() {
+    stopWalletPolling();
+    setWalletCheckoutError(null);
+  }
 
   async function handleBook() {
     if (!pickup || !dropoff) return;
@@ -689,16 +771,60 @@ export default function PassengerApp({ userId }: Props) {
                 <div className="w-8 h-8 border-2 border-[#FFCC00] border-t-transparent rounded-full animate-spin" />
                 <p className="text-slate-400 text-sm">Gaida maksājuma apstiprinājumu...</p>
               </div>
+            ) : walletCheckoutPending ? (
+              <div className="flex flex-col items-center gap-3 py-4 text-center">
+                <div className="w-8 h-8 border-2 border-[#FFCC00] border-t-transparent rounded-full animate-spin" />
+                <p className="text-white text-sm font-semibold">Gaidām apstiprinājumu no Apple Pay / Google Pay...</p>
+                <p className="text-slate-400 text-xs">Pabeidziet maksājumu pārlūkā un atgriezieties lietotnē</p>
+                <button onClick={handleWalletFallbackToCard}
+                  className="mt-2 text-xs text-slate-400 underline">
+                  Atcelt un maksāt ar karti
+                </button>
+              </div>
             ) : (
-              <StripePaymentForm
-                clientSecret={stripeClientSecret}
-                publishableKey={stripePublishableKey}
-                amountCents={stripeAmountCents}
-                onSuccess={() => { if (ride) startPaymentPolling(ride.id); }}
-                onError={msg => setPayError(msg)}
-                onRetry={handlePaymentRetry}
-                payError={payError}
-              />
+              <>
+                <StripePaymentForm
+                  clientSecret={stripeClientSecret}
+                  publishableKey={stripePublishableKey}
+                  amountCents={stripeAmountCents}
+                  onSuccess={() => { if (ride) startPaymentPolling(ride.id); }}
+                  onError={msg => setPayError(msg)}
+                  onRetry={handlePaymentRetry}
+                  payError={payError}
+                />
+                {CHECKOUT_WALLETS_ENABLED && (
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-3 py-1">
+                      <div className="flex-1 h-px bg-[#ffffff14]" />
+                      <span className="text-slate-500 text-[11px] uppercase tracking-wider">vai</span>
+                      <div className="flex-1 h-px bg-[#ffffff14]" />
+                    </div>
+                    <button onClick={handleWalletCheckout}
+                      className="w-full bg-black active:brightness-110 text-white font-semibold py-3.5 rounded-2xl text-sm border border-white/10 flex items-center justify-center gap-2">
+                      <span className="text-base">🍎</span>
+                      <span>Maksāt ar Apple Pay / Google Pay</span>
+                    </button>
+                    <p className="text-slate-500 text-[11px] text-center">
+                      Atvērs Stripe lapu ārējā pārlūkā
+                    </p>
+                    {walletCheckoutError && (
+                      <div className="bg-red-500/10 border border-red-500/20 rounded-2xl px-3 py-2 space-y-2">
+                        <p className="text-red-300 text-xs leading-relaxed">{walletCheckoutError}</p>
+                        <div className="flex gap-2">
+                          <button onClick={handleWalletCheckoutRetry}
+                            className="flex-1 bg-[#252836] active:bg-[#2f3347] text-white font-semibold py-2 rounded-xl text-xs">
+                            Mēģināt vēlreiz
+                          </button>
+                          <button onClick={handleWalletFallbackToCard}
+                            className="flex-1 bg-[#252836] active:bg-[#2f3347] text-white font-semibold py-2 rounded-xl text-xs">
+                            Maksāt ar karti
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </>
             )}
 
             <button onClick={handleCancel} disabled={cancelling}
