@@ -6,6 +6,10 @@ import DriverApp from './pages/DriverApp';
 import AdminPanel from './pages/AdminPanel';
 import { tg, getTelegramUser } from './telegram';
 import { registerUser } from './api';
+import { preloadGoogleMaps } from './components/MapPicker';
+
+// Kick off Google Maps script loading immediately — before any map component mounts
+preloadGoogleMaps();
 
 type Mode = 'loading' | 'ready' | 'error' | 'no-telegram';
 

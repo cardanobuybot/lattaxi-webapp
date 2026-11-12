@@ -1,30 +1,90 @@
-import { useState, useEffect, useRef, Component, type ReactNode } from 'react';
+import { useState, useEffect, useRef, Component, type ReactNode, type ErrorInfo } from 'react';
 import MapPicker from '../components/MapPicker';
 import type { Category, RideHistoryItem, StripeDriverStatus } from '../api';
 import { registerDriver, setDriverStatus, getRideStatus, getDriverHistory, getDriverEarnings, reportNoShow, authHeaders, getStripeDriverStatus, createStripeOnboardLink } from '../api';
 import { haptic } from '../telegram';
 
-class DriverErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
+interface EBState {
+  error: Error | null;
+  errorInfo: ErrorInfo | null;
+  autoRetried: boolean;
+  detailsOpen: boolean;
+}
+
+class DriverErrorBoundary extends Component<{ children: ReactNode }, EBState> {
+  private retryTimer: ReturnType<typeof setTimeout> | null = null;
+
   constructor(props: { children: ReactNode }) {
     super(props);
-    this.state = { error: null };
+    this.state = { error: null, errorInfo: null, autoRetried: false, detailsOpen: false };
   }
-  static getDerivedStateFromError(error: Error) { return { error }; }
+
+  static getDerivedStateFromError(error: Error): Partial<EBState> { return { error }; }
+
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    this.setState({ errorInfo: info });
+    console.error('[DriverApp] ErrorBoundary caught:', error.message, '\n' + (info.componentStack ?? ''));
+    // Auto-retry once if this is the first error
+    if (!this.state.autoRetried) {
+      this.retryTimer = setTimeout(() => {
+        this.setState({ error: null, errorInfo: null, autoRetried: true });
+      }, 700);
+    }
+  }
+
+  componentWillUnmount() {
+    if (this.retryTimer) clearTimeout(this.retryTimer);
+  }
+
   render() {
-    if (this.state.error) {
+    const { error, errorInfo, autoRetried, detailsOpen } = this.state;
+    if (!error) return this.props.children;
+
+    // During auto-retry window (before timeout fires) show spinner, not the error
+    if (!autoRetried) {
       return (
         <div className="flex items-center justify-center h-full bg-[#0f1117]">
-          <div className="text-center space-y-4 px-8 max-w-xs">
-            <div className="text-slate-400 text-sm">Neparedzēta kļūda. Mēģiniet vēlreiz.</div>
-            <button onClick={() => this.setState({ error: null })}
-              className="bg-[#FFCC00] text-[#0f1117] font-bold py-3 px-6 rounded-2xl text-sm w-full">
-              Mēģināt vēlreiz
-            </button>
+          <div className="text-center space-y-3">
+            <div className="text-4xl animate-spin">🚕</div>
+            <div className="text-slate-400 text-sm">Atkārtoti mēģina...</div>
           </div>
         </div>
       );
     }
-    return this.props.children;
+
+    // Build safe diagnostics (no tokens or personal data)
+    const stackLines = (error.stack ?? '').split('\n').slice(0, 6).join('\n');
+    const compLine = (errorInfo?.componentStack ?? '').split('\n').filter(l => l.trim()).slice(0, 1).join('');
+    const hasMaps = typeof window.google?.maps !== 'undefined' ? 'jā' : 'nē';
+    const hasInitData = Boolean(window.Telegram?.WebApp?.initData) ? 'jā' : 'nē';
+
+    return (
+      <div className="flex items-center justify-center h-full bg-[#0f1117]">
+        <div className="text-center space-y-4 px-8 max-w-sm w-full">
+          <div className="text-slate-400 text-sm">Neparedzēta kļūda. Mēģiniet vēlreiz.</div>
+          <button
+            onClick={() => this.setState({ error: null, errorInfo: null, detailsOpen: false })}
+            className="bg-[#FFCC00] text-[#0f1117] font-bold py-3 px-6 rounded-2xl text-sm w-full">
+            Mēģināt vēlreiz
+          </button>
+          <button
+            onClick={() => this.setState(s => ({ detailsOpen: !s.detailsOpen }))}
+            className="text-slate-600 text-xs underline">
+            {detailsOpen ? '▴ Aizvērt detaļas' : '▾ Detaļas'}
+          </button>
+          {detailsOpen && (
+            <div className="text-left bg-[#1a1d27] rounded-xl p-3 space-y-1 text-xs font-mono break-all">
+              <p className="text-red-400">{error.message}</p>
+              <p className="text-slate-500 whitespace-pre-wrap">{stackLines}</p>
+              {compLine && <p className="text-slate-600">Komponents: {compLine}</p>}
+              <p className="text-slate-600">Ceļš: {window.location.pathname}</p>
+              <p className="text-slate-600">google.maps: {hasMaps}</p>
+              <p className="text-slate-600">initData: {hasInitData}</p>
+            </div>
+          )}
+        </div>
+      </div>
+    );
   }
 }
 

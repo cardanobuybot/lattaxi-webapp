@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, Component, type ReactNode } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 
@@ -50,9 +50,15 @@ const driverIcon = L.divIcon({
 });
 
 // ── Google Maps script loader (singleton across all MapPicker instances) ──
+// Uses the `callback` URL param (not onload) so google.maps.Map is guaranteed
+// available when our callback fires. With loading=async, onload fires before
+// constructors are bootstrapped — that caused "G.Map is not a constructor" on
+// first open, caught by DriverErrorBoundary.
 type GmLoadState = 'idle' | 'loading' | 'ready' | 'failed';
 let gmLoadState: GmLoadState = 'idle';
 const gmCallbacks: Array<(ok: boolean) => void> = [];
+const GM_CB = '__lattaxi_gm_init';
+const GM_TIMEOUT_MS = 8000;
 
 function loadGoogleMaps(apiKey: string, onDone: (ok: boolean) => void): void {
   if (gmLoadState === 'ready') { onDone(true); return; }
@@ -61,25 +67,48 @@ function loadGoogleMaps(apiKey: string, onDone: (ok: boolean) => void): void {
   if (gmLoadState === 'loading') return;
   gmLoadState = 'loading';
 
-  (window as unknown as Record<string, unknown>).gm_authFailure = () => {
+  const win = window as unknown as Record<string, unknown>;
+
+  win.gm_authFailure = () => {
     console.log('[LatTaxi] Google Maps autorizācija neizdevās, izmanto Leaflet.');
     gmLoadState = 'failed';
+    delete win[GM_CB];
     gmCallbacks.splice(0).forEach(fn => fn(false));
   };
 
-  const s = document.createElement('script');
-  s.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(apiKey)}&libraries=geometry&loading=async`;
-  s.async = true;
-  s.onerror = () => {
-    console.log('[LatTaxi] Google Maps ielāde neizdevās, izmanto Leaflet.');
-    gmLoadState = 'failed';
-    gmCallbacks.splice(0).forEach(fn => fn(false));
-  };
-  s.onload = () => {
+  // Google calls this callback only after all constructors are available
+  win[GM_CB] = () => {
+    delete win[GM_CB];
     gmLoadState = 'ready';
     gmCallbacks.splice(0).forEach(fn => fn(true));
   };
+
+  const timer = setTimeout(() => {
+    if (gmLoadState !== 'ready') {
+      console.log('[LatTaxi] Google Maps timeout, izmanto Leaflet.');
+      gmLoadState = 'failed';
+      delete win[GM_CB];
+      gmCallbacks.splice(0).forEach(fn => fn(false));
+    }
+  }, GM_TIMEOUT_MS);
+
+  const s = document.createElement('script');
+  s.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(apiKey)}&libraries=geometry&callback=${GM_CB}`;
+  s.async = true;
+  s.onerror = () => {
+    clearTimeout(timer);
+    console.log('[LatTaxi] Google Maps ielāde neizdevās, izmanto Leaflet.');
+    gmLoadState = 'failed';
+    delete win[GM_CB];
+    gmCallbacks.splice(0).forEach(fn => fn(false));
+  };
   document.head.appendChild(s);
+}
+
+// Call this early (e.g. from App.tsx) to warm up the script before the map mounts
+export function preloadGoogleMaps(): void {
+  const key = import.meta.env.VITE_GOOGLE_MAPS_KEY as string | undefined;
+  if (key && gmLoadState === 'idle') loadGoogleMaps(key, () => {});
 }
 
 // ── Google Maps component ────────────────────────────────────────
@@ -331,6 +360,26 @@ function LeafletMapPicker({
   return <div ref={containerRef} style={{ height, width: '100%' }} />;
 }
 
+// ── MapErrorBoundary: catches render/effect errors inside GoogleMapPicker ───
+// Falls back to Leaflet silently so the dashboard stays functional.
+class MapErrorBoundary extends Component<
+  { fallbackProps: Props; children: ReactNode },
+  { failed: boolean }
+> {
+  constructor(props: { fallbackProps: Props; children: ReactNode }) {
+    super(props);
+    this.state = { failed: false };
+  }
+  static getDerivedStateFromError() { return { failed: true }; }
+  componentDidCatch(err: Error) {
+    console.warn('[LatTaxi] GoogleMapPicker error, switching to Leaflet:', err.message);
+  }
+  render() {
+    if (this.state.failed) return <LeafletMapPicker {...this.props.fallbackProps} />;
+    return this.props.children;
+  }
+}
+
 // ── Main export: selects provider based on key availability ────────
 export default function MapPicker(props: Props) {
   const [provider, setProvider] = useState<'pending' | 'google' | 'leaflet'>('pending');
@@ -344,6 +393,12 @@ export default function MapPicker(props: Props) {
   if (provider === 'pending') {
     return <div style={{ height: props.height ?? '55vh', width: '100%', background: '#1e293b' }} />;
   }
-  if (provider === 'google') return <GoogleMapPicker {...props} />;
+  if (provider === 'google') {
+    return (
+      <MapErrorBoundary fallbackProps={props}>
+        <GoogleMapPicker {...props} />
+      </MapErrorBoundary>
+    );
+  }
   return <LeafletMapPicker {...props} />;
 }
