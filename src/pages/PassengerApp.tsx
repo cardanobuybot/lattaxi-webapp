@@ -10,24 +10,60 @@ const CHECKOUT_WALLETS_ENABLED = String(import.meta.env.VITE_CHECKOUT_WALLETS_EN
 
 interface LatLng { lat: number; lng: number }
 
-async function reverseGeocode(lat: number, lng: number): Promise<string> {
+type GeoResult = { ok: true; address: string } | { ok: false };
+
+function formatPhotonAddress(p: { name?: string; street?: string; housenumber?: string; city?: string }): string | null {
+  const parts: string[] = [];
+  if (p.street && p.housenumber) parts.push(`${p.street} ${p.housenumber}`);
+  else if (p.street) parts.push(p.street);
+  else if (p.name) parts.push(p.name);
+  if (p.city && !parts.includes(p.city)) parts.push(p.city);
+  return parts.join(', ') || null;
+}
+
+function reverseGoogle(lat: number, lng: number, signal: AbortSignal): Promise<GeoResult> {
+  return new Promise((resolve) => {
+    const G = (window as unknown as { google?: { maps?: { Geocoder?: new () => google.maps.Geocoder } } }).google;
+    if (!G?.maps?.Geocoder) { resolve({ ok: false }); return; }
+    if (signal.aborted) { resolve({ ok: false }); return; }
+    const geocoder = new G.maps.Geocoder();
+    const onAbort = () => resolve({ ok: false });
+    signal.addEventListener('abort', onAbort, { once: true });
+    geocoder.geocode({ location: { lat, lng }, language: 'lv', region: 'lv' }, (results, status) => {
+      signal.removeEventListener('abort', onAbort);
+      if (signal.aborted) { resolve({ ok: false }); return; }
+      if (status === 'OK' && results && results.length > 0) {
+        const r0 = results[0];
+        const streetAddr = results.find(r => r.types?.includes('street_address') || r.types?.includes('premise'));
+        const chosen = streetAddr || r0;
+        const addr = chosen.formatted_address?.replace(/,\s*Latvija$/i, '').trim() || '';
+        if (addr) { resolve({ ok: true, address: addr }); return; }
+      }
+      resolve({ ok: false });
+    });
+  });
+}
+
+async function reversePhoton(lat: number, lng: number, signal: AbortSignal): Promise<GeoResult> {
   try {
     const res = await fetch(
       `https://photon.komoot.io/reverse?lat=${lat}&lon=${lng}&limit=1`,
-      { headers: { 'Accept-Language': 'lv' } }
+      { headers: { 'Accept-Language': 'lv' }, signal }
     );
     const data = await res.json();
     const p = data.features?.[0]?.properties;
-    if (!p) return `${lat.toFixed(4)}, ${lng.toFixed(4)}`;
-    const parts: string[] = [];
-    if (p.street && p.housenumber) parts.push(`${p.street} ${p.housenumber}`);
-    else if (p.street) parts.push(p.street);
-    else if (p.name) parts.push(p.name);
-    if (p.city) parts.push(p.city);
-    return parts.join(', ') || `${lat.toFixed(4)}, ${lng.toFixed(4)}`;
+    if (!p) return { ok: false };
+    const addr = formatPhotonAddress(p);
+    return addr ? { ok: true, address: addr } : { ok: false };
   } catch {
-    return `${lat.toFixed(4)}, ${lng.toFixed(4)}`;
+    return { ok: false };
   }
+}
+
+async function reverseGeocode(lat: number, lng: number, signal: AbortSignal): Promise<GeoResult> {
+  const g = await reverseGoogle(lat, lng, signal);
+  if (g.ok || signal.aborted) return g;
+  return reversePhoton(lat, lng, signal);
 }
 function loadFav(kind: 'home' | 'work'): (LatLng & { address: string }) | null {
   try {
@@ -74,8 +110,14 @@ export default function PassengerApp({ userId }: Props) {
   const [pinPos, setPinPos]           = useState<LatLng | null>(null);
   const [pinAddress, setPinAddress]   = useState<string | null>(null);
   const [pinMoving, setPinMoving]     = useState(false);
+  const [pinGeoState, setPinGeoState] = useState<'idle' | 'loading' | 'ok' | 'notfound'>('idle');
   const [mapFly, setMapFly]           = useState<LatLng | null>(null);
-  const geoSeqRef = useRef(0);
+  const [inputFocused, setInputFocused] = useState(false);
+  const geoSeqRef    = useRef(0);
+  const geoAbortRef  = useRef<AbortController | null>(null);
+  const geoDebRef    = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const geoLastCallRef = useRef<number>(0);
+  const geoLastKeyRef  = useRef<string | null>(null);
   const [favHome, setFavHome] = useState<(LatLng & { address: string }) | null>(() => loadFav('home'));
   const [favWork, setFavWork] = useState<(LatLng & { address: string }) | null>(() => loadFav('work'));
   const [favAssign, setFavAssign] = useState<'home' | 'work' | null>(null);
@@ -123,27 +165,115 @@ export default function PassengerApp({ userId }: Props) {
     );
   }, []);
 
-  function handleCenterChange(pos: LatLng) {
-    setPinMoving(false);
-    setPinPos(pos);
-    const seq = ++geoSeqRef.current;
+  // Keep a CSS variable for the keyboard-aware viewport height so lists can size
+  // themselves above the on-screen keyboard. Also react to Telegram viewportChanged.
+  useEffect(() => {
+    const root = document.documentElement;
+    const apply = (h: number) => root.style.setProperty('--viewport-h', `${Math.round(h)}px`);
+    const vv = window.visualViewport;
+    const update = () => apply(vv ? vv.height : window.innerHeight);
+    update();
+    vv?.addEventListener('resize', update);
+    vv?.addEventListener('scroll', update);
+    window.addEventListener('resize', update);
+    const onTg = () => update();
+    try { tg?.onEvent('viewportChanged', onTg); } catch { /* ignore */ }
+    return () => {
+      vv?.removeEventListener('resize', update);
+      vv?.removeEventListener('scroll', update);
+      window.removeEventListener('resize', update);
+      try { tg?.offEvent('viewportChanged', onTg); } catch { /* ignore */ }
+    };
+  }, []);
+
+  function locateMe() {
+    haptic('light');
+    navigator.geolocation?.getCurrentPosition(
+      p => setMapFly({ lat: p.coords.latitude, lng: p.coords.longitude }),
+      () => {},
+      { enableHighAccuracy: true, timeout: 5000 }
+    );
+  }
+
+  function runReverse(pos: LatLng, seq: number, key: string) {
+    geoAbortRef.current?.abort();
+    const ctrl = new AbortController();
+    geoAbortRef.current = ctrl;
+    const timer = setTimeout(() => ctrl.abort(), 4000);
+    setPinGeoState('loading');
     setPinAddress(null);
-    reverseGeocode(pos.lat, pos.lng).then(addr => {
-      if (geoSeqRef.current === seq) setPinAddress(addr);
+    reverseGeocode(pos.lat, pos.lng, ctrl.signal).then((r) => {
+      clearTimeout(timer);
+      if (geoSeqRef.current !== seq) return;
+      if (r.ok) {
+        setPinAddress(r.address);
+        setPinGeoState('ok');
+        geoLastKeyRef.current = key;
+      } else {
+        setPinAddress(null);
+        setPinGeoState('notfound');
+      }
+    }).catch(() => {
+      clearTimeout(timer);
+      if (geoSeqRef.current !== seq) return;
+      setPinGeoState('notfound');
     });
   }
 
+  function handleCenterChange(pos: LatLng) {
+    setPinMoving(false);
+    setPinPos(pos);
+    const key = `${pos.lat.toFixed(5)},${pos.lng.toFixed(5)}`;
+    if (key === geoLastKeyRef.current && pinGeoState === 'ok') return;
+    const seq = ++geoSeqRef.current;
+    if (geoDebRef.current) clearTimeout(geoDebRef.current);
+    const now = Date.now();
+    const sinceLast = now - geoLastCallRef.current;
+    const delay = Math.max(300, 400 - sinceLast);
+    geoDebRef.current = setTimeout(() => {
+      geoLastCallRef.current = Date.now();
+      runReverse(pos, seq, key);
+    }, delay);
+  }
+
+  function retryPinGeocode() {
+    if (!pinPos) return;
+    const seq = ++geoSeqRef.current;
+    const key = `${pinPos.lat.toFixed(5)},${pinPos.lng.toFixed(5)}`;
+    geoLastKeyRef.current = null;
+    geoLastCallRef.current = Date.now();
+    runReverse(pinPos, seq, key);
+  }
+
   function confirmPin() {
-    if (!pinPos || !pinAddress) return;
+    if (!pinPos || !pinAddress || pinGeoState !== 'ok') return;
     haptic('medium');
     if (picking === 'pickup') {
       setPickup({ ...pinPos, address: pinAddress });
+      setMapFly({ lat: pinPos.lat, lng: pinPos.lng });
       setPicking(dropoff ? null : 'dropoff');
     } else if (picking === 'dropoff') {
       applyDropoffPoint({ ...pinPos, address: pinAddress });
+      setMapFly({ lat: pinPos.lat, lng: pinPos.lng });
       setPicking(null);
     }
   }
+
+  function cancelPicking() {
+    haptic('light');
+    geoAbortRef.current?.abort();
+    if (geoDebRef.current) clearTimeout(geoDebRef.current);
+    setPinMoving(false);
+    setPinAddress(null);
+    setPinGeoState('idle');
+    setPicking(null);
+    setFavAssign(null);
+  }
+
+  useEffect(() => () => {
+    geoAbortRef.current?.abort();
+    if (geoDebRef.current) clearTimeout(geoDebRef.current);
+  }, []);
 
   useEffect(() => {
     if (!pickup || !dropoff) return;
@@ -203,9 +333,9 @@ export default function PassengerApp({ userId }: Props) {
     return () => clearInterval(iv);
   }, [ride?.id, step]);
 
-  // nearest available driver ETA while searching
+  // nearest available driver ETA while confirming or searching
   useEffect(() => {
-    if (step !== 'searching' || !pickup) { setSearchEta(null); return; }
+    if (!pickup || !['confirm', 'searching'].includes(step)) { setSearchEta(null); return; }
     let stale = false;
     const load = () => getNearestDriverEta(pickup.lat, pickup.lng)
       .then(r => { if (!stale && r.ok) setSearchEta(r.nearest_eta_minutes); })
@@ -456,13 +586,24 @@ export default function PassengerApp({ userId }: Props) {
   const durMin = quote ? Math.round(quote.durationSeconds / 60) : 0;
   const distKm = quote ? (quote.distanceMeters / 1000).toFixed(1) : '—';
   const showMap = step !== 'history';
+  const pickingMode = step === 'home' && picking !== null;
+  const pickingTitle = picking === 'pickup'
+    ? 'Pacelšanas vieta'
+    : favAssign === 'home'
+      ? 'Mājas'
+      : favAssign === 'work'
+        ? 'Darbs'
+        : 'Galamērķis';
 
   return (
     <div className="relative h-full bg-[#0f1117] overflow-hidden">
 
-      {/* ─── MAP (full screen) ─── */}
+      {/* ─── MAP (resizes above compact panel when picking) ─── */}
       {showMap && (
-        <div className="absolute inset-0">
+        <div
+          className="absolute left-0 right-0 top-0"
+          style={{ bottom: pickingMode ? 'var(--pick-panel-h, 240px)' : 0 }}
+        >
           <MapPicker
             height="100%"
             center={mapFly ?? undefined}
@@ -471,25 +612,105 @@ export default function PassengerApp({ userId }: Props) {
             driverMarker={rideStatus?.driver_location ?? null}
             routePolyline={step === 'confirm' ? quote?.encodedPolyline ?? null : null}
             panOnClick={step === 'home' && !!picking}
-            onMoveStart={() => { if (step === 'home' && picking) setPinMoving(true); }}
-            onCenterChange={(pos) => { if (step === 'home' && picking) handleCenterChange(pos); }}
+            onMoveStart={() => { if (pickingMode) setPinMoving(true); }}
+            onCenterChange={(pos) => { if (pickingMode) handleCenterChange(pos); }}
             interactive={step === 'home'}
           />
+
+          {/* center pin — inside map container, stays at visible map center */}
+          {pickingMode && (
+            <>
+              <div
+                className="absolute left-1/2 top-1/2 z-[5] pointer-events-none"
+                style={{ transform: 'translate(-50%, -100%)' }}
+              >
+                <div className={`flex flex-col items-center transition-transform duration-200 ${pinMoving ? '-translate-y-2' : ''}`}>
+                  <div
+                    className={`w-6 h-6 rounded-full border-[3px] border-white ${picking === 'pickup' ? 'bg-[#16a34a]' : 'bg-[#dc2626]'}`}
+                    style={{ boxShadow: pinMoving ? '0 12px 20px -4px rgba(0,0,0,0.6)' : '0 4px 10px -2px rgba(0,0,0,0.5)' }}
+                  />
+                  <div className="w-0.5 h-5 bg-[#0f1117]/80" />
+                </div>
+                <div className={`mx-auto mt-0.5 w-2.5 h-1.5 bg-black/40 rounded-full blur-[1.5px] transition-all duration-200 ${pinMoving ? 'opacity-30 scale-150' : 'opacity-100'}`} />
+              </div>
+
+              {/* My location button */}
+              <button
+                type="button"
+                onClick={locateMe}
+                aria-label="Mana atrašanās vieta"
+                className="absolute right-3 bottom-3 z-[6] w-11 h-11 rounded-full bg-[#1a1d27] shadow-lg flex items-center justify-center active:brightness-90 border border-[#ffffff14]"
+              >
+                <svg viewBox="0 0 24 24" fill="none" className="w-5 h-5 text-[#FFCC00]">
+                  <circle cx="12" cy="12" r="2.5" fill="currentColor" />
+                  <path d="M12 2v3M12 19v3M2 12h3M19 12h3" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                  <circle cx="12" cy="12" r="7.5" stroke="currentColor" strokeWidth="1.8" fill="none" />
+                </svg>
+              </button>
+            </>
+          )}
         </div>
       )}
 
-      {/* ─── CENTER PIN (Bolt-style point picking) ─── */}
-      {showMap && step === 'home' && picking && (
-        <div className="absolute left-1/2 top-1/2 z-[5] pointer-events-none" style={{ transform: 'translate(-50%, -100%)' }}>
-          <div className={`flex flex-col items-center transition-transform duration-150 ${pinMoving ? '-translate-y-1.5' : ''}`}>
-            <div className={`w-5 h-5 rounded-full border-[3px] border-white shadow-lg ${picking === 'pickup' ? 'bg-[#16a34a]' : 'bg-[#dc2626]'}`} />
-            <div className="w-0.5 h-4 bg-[#0f1117]/80" />
+      {/* ─── COMPACT PICKING PANEL (replaces bottom sheet in picking mode) ─── */}
+      {pickingMode && (
+        <div
+          className="absolute bottom-0 left-0 right-0 z-10 bg-[#1a1d27] rounded-t-3xl shadow-2xl"
+          style={{ ['--pick-panel-h' as string]: '240px' }}
+        >
+          <div className="flex justify-center pt-3 pb-1">
+            <div className="w-10 h-1 bg-[#ffffff20] rounded-full" />
           </div>
-          <div className={`mx-auto mt-0.5 w-2 h-1 bg-black/30 rounded-full blur-[1px] transition-opacity ${pinMoving ? 'opacity-0' : 'opacity-100'}`} />
+          <div className="px-4 pb-5 space-y-3">
+            <div className="flex justify-between items-center">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <div className={`w-3 h-3 flex-shrink-0 ${picking === 'pickup' ? 'rounded-full bg-[#4ade80]' : 'rounded-sm bg-[#f87171]'}`} />
+                <span className="text-white font-bold text-base truncate">{pickingTitle}</span>
+              </div>
+              <button
+                onClick={cancelPicking}
+                className="text-slate-300 text-xs font-semibold px-3 py-1.5 bg-[#ffffff10] active:bg-[#ffffff18] rounded-full flex-shrink-0 ml-2"
+              >
+                Atpakaļ
+              </button>
+            </div>
+
+            <div className="bg-[#252836] rounded-2xl px-4 py-3 min-h-[52px] flex items-center gap-3">
+              {pinGeoState === 'loading' ? (
+                <>
+                  <span className="w-3.5 h-3.5 border-2 border-slate-500 border-t-transparent rounded-full animate-spin flex-shrink-0" />
+                  <span className="text-slate-400 text-sm">Meklē adresi…</span>
+                </>
+              ) : pinGeoState === 'notfound' ? (
+                <>
+                  <span className="text-amber-400 text-sm flex-1">Adrese nav atrasta</span>
+                  <button
+                    onClick={retryPinGeocode}
+                    className="text-[#FFCC00] text-xs font-semibold px-3 py-1.5 rounded-full bg-[#FFCC00]/10 active:bg-[#FFCC00]/20 flex-shrink-0"
+                  >
+                    Mēģināt vēlreiz
+                  </button>
+                </>
+              ) : pinGeoState === 'ok' && pinAddress ? (
+                <span className="text-white text-sm flex-1 truncate">{pinAddress}</span>
+              ) : (
+                <span className="text-slate-500 text-sm">Pavelciet karti, lai izvēlētos punktu</span>
+              )}
+            </div>
+
+            <button
+              onClick={confirmPin}
+              disabled={pinGeoState !== 'ok'}
+              className="w-full bg-[#FFCC00] active:brightness-90 disabled:opacity-50 text-[#0f1117] font-bold py-4 rounded-2xl text-base shadow-lg shadow-yellow-500/20"
+            >
+              Apstiprināt
+            </button>
+          </div>
         </div>
       )}
 
-      {/* ─── BOTTOM SHEET (overlays map) ─── */}
+      {/* ─── BOTTOM SHEET (hidden while picking) ─── */}
+      {!pickingMode && (
       <div className={`absolute bottom-0 left-0 right-0 z-10 bg-[#1a1d27] rounded-t-3xl overflow-y-auto ${step === 'history' ? 'top-0 rounded-t-none' : 'max-h-[72vh]'}`}>
 
         {/* drag handle */}
@@ -530,6 +751,7 @@ export default function PassengerApp({ userId }: Props) {
                 <AddressSearch
                   placeholder="Izejas punkts"
                   value={pickup?.address ?? ''}
+                  onFocusChange={setInputFocused}
                   onChange={(address, lat, lng) => {
                     setPickup({ lat, lng, address });
                     setMapFly({ lat, lng });
@@ -548,6 +770,7 @@ export default function PassengerApp({ userId }: Props) {
                 <AddressSearch
                   placeholder="Galamērķis"
                   value={dropoff?.address ?? ''}
+                  onFocusChange={setInputFocused}
                   onChange={(address, lat, lng) => {
                     applyDropoffPoint({ lat, lng, address });
                     setMapFly({ lat, lng });
@@ -562,7 +785,8 @@ export default function PassengerApp({ userId }: Props) {
               </div>
             </div>
 
-            {/* favorites: Home / Work */}
+            {/* favorites: Home / Work (hidden while typing shows results) */}
+            {!inputFocused && (
             <div className="flex gap-2">
               {([['home', '🏠', 'Mājas', favHome], ['work', '💼', 'Darbs', favWork]] as const).map(([kind, icon, label, fav]) => (
                 <div key={kind}
@@ -586,30 +810,10 @@ export default function PassengerApp({ userId }: Props) {
                 </div>
               ))}
             </div>
+            )}
 
             {/* CTA */}
-            {picking ? (
-              <div className="space-y-2">
-                <div className="bg-[#252836] rounded-2xl px-4 py-3 flex items-center gap-3">
-                  <div className={`w-3 h-3 flex-shrink-0 ${picking === 'pickup' ? 'rounded-full bg-[#4ade80]' : 'rounded-sm bg-[#f87171]'}`} />
-                  <span className={`text-sm flex-1 truncate ${pinMoving || !pinAddress ? 'text-slate-500' : 'text-white'}`}>
-                    {pinMoving || !pinAddress ? 'Meklē adresi...' : pinAddress}
-                  </span>
-                </div>
-                <button
-                  onClick={confirmPin}
-                  disabled={pinMoving || !pinAddress}
-                  className="w-full bg-[#FFCC00] active:brightness-90 disabled:opacity-50 text-[#0f1117] font-bold py-4 rounded-2xl text-base shadow-lg shadow-yellow-500/20"
-                >
-                  {picking === 'pickup'
-                    ? 'Apstiprināt izejas punktu'
-                    : favAssign
-                      ? `Saglabāt kā ${favAssign === 'home' ? '🏠 Mājas' : '💼 Darbs'}`
-                      : 'Apstiprināt galamērķi'}
-                </button>
-                <p className="text-center text-slate-500 text-xs">Pavelciet karti, lai precizētu punktu</p>
-              </div>
-            ) : pickup && dropoff ? (
+            {pickup && dropoff ? (
               <button
                 onClick={() => { setNotice(null); setStep('confirm'); }}
                 disabled={loadingQuote}
@@ -635,7 +839,10 @@ export default function PassengerApp({ userId }: Props) {
                 className="flex items-center gap-1 text-slate-400 text-sm">
                 ← Atpakaļ
               </button>
-              <span className="text-slate-400 text-sm">{distKm} km · {durMin} min</span>
+              <div className="text-right">
+                <div className="text-slate-400 text-sm">{distKm} km · {durMin} min</div>
+                {quote && <div className="text-slate-500 text-[11px]">braucienā ~{durMin} min</div>}
+              </div>
             </div>
 
             {/* editable route */}
@@ -656,7 +863,14 @@ export default function PassengerApp({ userId }: Props) {
               </button>
             </div>
 
-            <p className="text-white font-bold text-lg">Izvēlies braucienu</p>
+            <div className="flex items-end justify-between">
+              <p className="text-white font-bold text-lg">Izvēlies braucienu</p>
+              {searchEta != null && (
+                <span className="text-[#FFCC00] text-xs font-semibold bg-[#FFCC00]/10 px-2.5 py-1 rounded-full">
+                  Auto atbrauks ~{searchEta} min
+                </span>
+              )}
+            </div>
 
             {/* categories */}
             {loadingQuote && (
@@ -1089,6 +1303,7 @@ export default function PassengerApp({ userId }: Props) {
         )}
 
       </div>
+      )}
 
       {/* ─── CANCEL FEE MODAL ─── */}
       {cancelModal && (
