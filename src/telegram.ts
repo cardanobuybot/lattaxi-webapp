@@ -44,6 +44,11 @@ interface TelegramWebApp {
   };
   sendData(data: string): void;
   openLink(url: string): void;
+  onEvent(event: 'viewportChanged', cb: (ev: { isStateStable: boolean }) => void): void;
+  offEvent(event: 'viewportChanged', cb: (ev: { isStateStable: boolean }) => void): void;
+  viewportHeight?: number;
+  viewportStableHeight?: number;
+  isExpanded?: boolean;
 }
 
 export const tg = window.Telegram?.WebApp;

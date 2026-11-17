@@ -317,7 +317,9 @@ function LeafletMapPicker({
     mapRef.current = map;
     const c = map.getCenter();
     onCenterChangeRef.current?.({ lat: c.lat, lng: c.lng });
-    return () => { map.remove(); mapRef.current = null; };
+    const ro = new ResizeObserver(() => { map.invalidateSize(); });
+    ro.observe(containerRef.current!);
+    return () => { ro.disconnect(); map.remove(); mapRef.current = null; };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
