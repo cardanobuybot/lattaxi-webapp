@@ -132,6 +132,8 @@ export default function PassengerApp({ userId }: Props) {
   const [walletCheckoutError, setWalletCheckoutError] = useState<string | null>(null);
   const walletPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const walletPollDeadlineRef = useRef<number>(0);
+  const bottomSheetRef = useRef<HTMLDivElement>(null);
+  const [bottomSheetH, setBottomSheetH] = useState(0);
 
   function saveFav(kind: 'home' | 'work', point: LatLng & { address: string }) {
     try { localStorage.setItem(`lattaxi_fav_${kind}`, JSON.stringify(point)); } catch { /* ignore */ }
@@ -164,6 +166,18 @@ export default function PassengerApp({ userId }: Props) {
       { enableHighAccuracy: true, timeout: 5000 }
     );
   }, []);
+
+  // Measure the live bottom sheet so the map can inset its fitBounds padding
+  // and keep the route visible above the panel on confirm/payment/searching.
+  useEffect(() => {
+    const el = bottomSheetRef.current;
+    if (!el) { setBottomSheetH(0); return; }
+    const update = () => setBottomSheetH(el.getBoundingClientRect().height);
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [step, picking]);
 
   // Keep a CSS variable for the keyboard-aware viewport height so lists can size
   // themselves above the on-screen keyboard. Also react to Telegram viewportChanged.
@@ -626,7 +640,12 @@ export default function PassengerApp({ userId }: Props) {
             pickupMarker={picking === 'pickup' ? null : pickup}
             dropoffMarker={picking === 'dropoff' ? null : dropoff}
             driverMarker={rideStatus?.driver_location ?? null}
-            routePolyline={step === 'confirm' ? quote?.encodedPolyline ?? null : null}
+            routePolyline={
+              step === 'confirm' || step === 'payment' || step === 'searching'
+                ? quote?.encodedPolyline ?? null
+                : null
+            }
+            bottomInset={bottomSheetH}
             panOnClick={step === 'home' && !!picking}
             onMoveStart={() => { if (pickingMode) setPinMoving(true); }}
             onCenterChange={(pos) => { if (pickingMode) handleCenterChange(pos); }}
@@ -671,6 +690,7 @@ export default function PassengerApp({ userId }: Props) {
       {/* ─── COMPACT PICKING PANEL (replaces bottom sheet in picking mode) ─── */}
       {pickingMode && (
         <div
+          ref={bottomSheetRef}
           className="absolute bottom-0 left-0 right-0 z-10 bg-[#1a1d27] rounded-t-3xl shadow-2xl"
           style={{ ['--pick-panel-h' as string]: '240px' }}
         >
@@ -727,7 +747,10 @@ export default function PassengerApp({ userId }: Props) {
 
       {/* ─── BOTTOM SHEET (hidden while picking) ─── */}
       {!pickingMode && (
-      <div className={`absolute bottom-0 left-0 right-0 z-10 bg-[#1a1d27] rounded-t-3xl overflow-y-auto ${step === 'history' ? 'top-0 rounded-t-none' : 'max-h-[72vh]'}`}>
+      <div
+        ref={bottomSheetRef}
+        className={`absolute bottom-0 left-0 right-0 z-10 bg-[#1a1d27] rounded-t-3xl overflow-y-auto ${step === 'history' ? 'top-0 rounded-t-none' : 'max-h-[72vh]'}`}
+      >
 
         {/* drag handle */}
         <div className="flex justify-center pt-3 pb-1">
