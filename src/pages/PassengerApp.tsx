@@ -472,6 +472,14 @@ export default function PassengerApp({ userId }: Props) {
     if (!pickup || !dropoff) return;
     setBooking(true);
     setBookError(null);
+    // Full payment-state reset so a new order never shows the previous
+    // ride's deposit / selected method / payment step.
+    setStripeClientSecret(null);
+    setStripePublishableKey(null);
+    setStripeAmountCents(0);
+    setPayError(null);
+    setWalletCheckoutPending(false);
+    setWalletCheckoutError(null);
     haptic('medium');
     try {
       const res = await requestRide({
@@ -495,20 +503,28 @@ export default function PassengerApp({ userId }: Props) {
       setCancelError(null);
       setRide(res.ride);
 
-      // Try to set up payment; fall back to searching if disabled or key missing
+      // Strict payment flow: we can only move to 'searching' AFTER the hold is
+      // authorized (inside PaymentScreen). If PI setup fails, cancel the ride
+      // (no fee — nothing was authorized) and stay on confirm with a message.
+      let pi: Awaited<ReturnType<typeof createPaymentIntent>> | null = null;
       try {
-        const pi = await createPaymentIntent(res.ride.id);
-        if (pi.ok && pi.client_secret && pi.publishable_key) {
-          setStripeClientSecret(pi.client_secret);
-          setStripePublishableKey(pi.publishable_key);
-          setStripeAmountCents(pi.amount);
-          setPayError(null);
-          setStep('payment');
-          return;
-        }
-      } catch { /* payments disabled or not configured — proceed without payment */ }
-
-      setStep('searching');
+        pi = await createPaymentIntent(res.ride.id);
+      } catch {
+        pi = null;
+      }
+      if (!pi || !pi.ok || !pi.client_secret || !pi.publishable_key) {
+        setBookError('Maksājumu neizdevās sagatavot. Mēģiniet vēlreiz.');
+        try {
+          await cancelRide(res.ride.id, userId, false);
+        } catch { /* ignore — backend will time out the stale ride on retry */ }
+        setRide(null);
+        rideStatusRef.current = null;
+        return;
+      }
+      setStripeClientSecret(pi.client_secret);
+      setStripePublishableKey(pi.publishable_key);
+      setStripeAmountCents(pi.amount);
+      setStep('payment');
     } catch (e) {
       setBookError(e instanceof Error ? e.message : 'Neizdevās izveidot pasūtījumu. Mēģiniet vēlreiz.');
     } finally { setBooking(false); }
