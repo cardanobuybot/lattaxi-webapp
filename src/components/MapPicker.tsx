@@ -10,6 +10,11 @@ interface Props {
   dropoffMarker?: LatLng | null;
   driverMarker?: LatLng | null;
   routePolyline?: string | null;
+  // Px to reserve at the bottom of the viewport when fitting the route so the
+  // polyline + markers stay visible above any sticky bottom sheet (confirm /
+  // payment / searching). The caller measures its bottom panel and passes
+  // its height; MapPicker adds a 32 px gutter on top.
+  bottomInset?: number;
   onMapClick?: (pos: LatLng) => void;
   onMoveStart?: () => void;
   onCenterChange?: (pos: LatLng) => void;
@@ -117,6 +122,7 @@ export function preloadGoogleMaps(): void {
 // in Google Cloud Console and added as VITE_GOOGLE_MAPS_MAP_ID.
 function GoogleMapPicker({
   center, pickupMarker, dropoffMarker, driverMarker, routePolyline,
+  bottomInset = 0,
   onMapClick, onMoveStart, onCenterChange,
   panOnClick = false, height = '55vh', interactive = true,
 }: Props) {
@@ -234,7 +240,8 @@ function GoogleMapPicker({
     }
   }, [driverMarker]);
 
-  // Route polyline
+  // Route polyline. Re-fits when bottomInset changes so the route stays visible
+  // above sticky bottom sheets (confirm/payment/searching panels).
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
@@ -248,8 +255,22 @@ function GoogleMapPicker({
     });
     const bounds = new google.maps.LatLngBounds();
     path.forEach(p => bounds.extend(p));
-    map.fitBounds(bounds, 32);
-  }, [routePolyline]);
+    map.fitBounds(bounds, { top: 48, right: 32, bottom: bottomInset + 32, left: 32 });
+  }, [routePolyline, bottomInset]);
+
+  // Notify Google Maps when its container resized (bottom panel height change,
+  // orientation flip) so it re-lays out and the polyline/markers stay centred
+  // in the visible area rather than hidden under the bottom sheet.
+  useEffect(() => {
+    const map = mapRef.current;
+    const el = containerRef.current;
+    if (!map || !el) return;
+    const ro = new ResizeObserver(() => {
+      google.maps.event.trigger(map, 'resize');
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   // Pan to updated center
   useEffect(() => {
@@ -265,6 +286,7 @@ function GoogleMapPicker({
 // ── Leaflet fallback component (original unchanged logic) ─────────
 function LeafletMapPicker({
   center, pickupMarker, dropoffMarker, driverMarker, routePolyline,
+  bottomInset = 0,
   onMapClick, onMoveStart, onCenterChange,
   panOnClick = false, height = '55vh', interactive = true,
 }: Props) {
@@ -349,9 +371,13 @@ function LeafletMapPicker({
     if (routePolyline) {
       const coords = decodePolyline(routePolyline);
       polylineRef.current = L.polyline(coords, { color: '#FFCC00', weight: 4, opacity: 0.8 }).addTo(map);
-      map.fitBounds(polylineRef.current.getBounds(), { padding: [32, 32] });
+      // Asymmetric padding so the fitted bounds live above the bottom sheet.
+      map.fitBounds(polylineRef.current.getBounds(), {
+        paddingTopLeft: [32, 48],
+        paddingBottomRight: [32, bottomInset + 32],
+      });
     }
-  }, [routePolyline]);
+  }, [routePolyline, bottomInset]);
 
   useEffect(() => {
     if (center && mapRef.current) {
