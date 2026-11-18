@@ -27,12 +27,29 @@ function useAppInit() {
   const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
+    let cancelled = false;
     tg?.ready();
     tg?.expand();
 
-    const tgUser = getTelegramUser();
+    // Telegram sometimes fills initDataUnsafe a few ticks after tg.ready().
+    // Poll briefly instead of flipping straight to 'no-telegram'.
+    async function waitForTelegramUser() {
+      const maxAttempts = 10; // ~1.5s total
+      for (let i = 0; i < maxAttempts; i++) {
+        const user = getTelegramUser();
+        if (user?.id) return user;
+        if (!tg?.initData && !tg?.initDataUnsafe?.user && !window.Telegram?.WebApp) {
+          // Not inside Telegram at all → short-circuit after one pass.
+          if (i > 0) return null;
+        }
+        await new Promise(r => setTimeout(r, 150));
+      }
+      return getTelegramUser();
+    }
 
     async function init() {
+      const tgUser = await waitForTelegramUser();
+      if (cancelled) return;
       if (!tgUser?.id) {
         setState(s => ({ ...s, mode: 'no-telegram' }));
         return;
@@ -42,18 +59,21 @@ function useAppInit() {
 
       try {
         const res = await registerUser(id, name);
+        if (cancelled) return;
         if (res.ok) {
           setState({ mode: 'ready', userId: res.user.id, telegramId: id, userName: name });
         } else {
           setState(s => ({ ...s, mode: 'error' }));
         }
       } catch {
+        if (cancelled) return;
         setState(s => ({ ...s, mode: 'error' }));
       }
     }
 
     setState(s => ({ ...s, mode: 'loading' }));
     init();
+    return () => { cancelled = true; };
   }, [attempt]);
 
   return { ...state, retry: () => setAttempt(a => a + 1) };
@@ -130,10 +150,19 @@ function PaymentReturnScreen() {
 function NoTelegramScreen() {
   const isDriverRoute = window.location.pathname.startsWith('/driver');
   const botHandle = isDriverRoute ? '@LatTaxiDriverBot' : '@LatTaxiBot';
+  const botUrl = isDriverRoute ? 'https://t.me/LatTaxiDriverBot' : 'https://t.me/LatTaxiBot';
   return (
     <div className="flex items-center justify-center h-full bg-slate-900">
-      <div className="text-center text-slate-400 text-sm px-8">
-        Atveriet lietotni caur Telegram botu {botHandle}
+      <div className="text-center space-y-5 px-8 max-w-xs">
+        <div className="text-slate-400 text-sm">
+          Atveriet lietotni caur Telegram botu {botHandle}
+        </div>
+        <a
+          href={botUrl}
+          className="block bg-[#FFCC00] text-[#0f1117] font-bold py-3 px-6 rounded-2xl text-sm"
+        >
+          Atvērt caur {botHandle}
+        </a>
       </div>
     </div>
   );
