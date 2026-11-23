@@ -1,35 +1,104 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { loadStripe, type Stripe, type StripeElementsOptions } from '@stripe/stripe-js';
 import { Elements, PaymentElement, useStripe, useElements } from '@stripe/react-stripe-js';
+import { postPaymentClientLog } from '../api';
 
 interface FormProps {
+  rideId: number | null;
   amountCents: number;
+  onBeforeConfirm: () => void;
   onSuccess: () => void;
   onError: (msg: string) => void;
 }
 
-function PayForm({ amountCents, onSuccess, onError }: FormProps) {
+const CONFIRM_TIMEOUT_MS = 30_000;
+
+function PayForm({ rideId, amountCents, onBeforeConfirm, onSuccess, onError }: FormProps) {
   const stripe = useStripe();
   const elements = useElements();
   const [submitting, setSubmitting] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
+  const activeRideRef = useRef<number | null>(rideId);
+  activeRideRef.current = rideId;
+
+  async function reportLog(payload: Parameters<typeof postPaymentClientLog>[1]) {
+    const rid = activeRideRef.current;
+    if (!rid) return;
+    await postPaymentClientLog(rid, payload);
+  }
 
   async function handlePay() {
-    if (!stripe || !elements) return;
+    if (!stripe || !elements) {
+      await reportLog({ stage: 'guard', error_type: 'sdk_not_ready' });
+      return;
+    }
     setSubmitting(true);
     setLocalError(null);
-    const { error } = await stripe.confirmPayment({
-      elements,
-      confirmParams: { return_url: window.location.href },
-      redirect: 'if_required',
-    });
-    setSubmitting(false);
-    if (error) {
-      const msg = error.message ?? 'Maksājums neizdevās.';
-      setLocalError(msg);
-      onError(msg);
-    } else {
+    onBeforeConfirm();
+
+    let stage: string = 'before_submit';
+    try {
+      stage = 'before_submit';
+      const submitResult = await elements.submit();
+      if (submitResult && submitResult.error) {
+        const msg = submitResult.error.message ?? 'Pārbaudiet maksājuma datus.';
+        await reportLog({
+          stage,
+          error_type: submitResult.error.type ?? null,
+          error_code: submitResult.error.code ?? null,
+        });
+        setSubmitting(false);
+        setLocalError(msg);
+        onError(msg);
+        return;
+      }
+      stage = 'before_confirm';
+      const confirmPromise = stripe.confirmPayment({
+        elements,
+        confirmParams: { return_url: window.location.href },
+        redirect: 'if_required',
+      });
+      const timeoutPromise = new Promise<{ error: { type: string; message: string; code?: string } }>((resolve) => {
+        setTimeout(() => {
+          resolve({ error: { type: 'client_timeout', message: 'Maksājums neatbildēja 30 sekunžu laikā. Mēģiniet vēlreiz.' } });
+        }, CONFIRM_TIMEOUT_MS);
+      });
+      const raceResult = (await Promise.race([confirmPromise, timeoutPromise])) as {
+        error?: { type?: string | null; message?: string | null; code?: string | null; decline_code?: string | null };
+        paymentIntent?: { status?: string | null } | null;
+      };
+      stage = 'after_confirm';
+      if (raceResult && raceResult.error) {
+        const err = raceResult.error;
+        const msg = err.message ?? 'Maksājums neizdevās.';
+        await reportLog({
+          stage: err.type === 'client_timeout' ? 'client_timeout' : stage,
+          error_type: err.type ?? null,
+          error_code: err.code ?? null,
+          decline_code: err.decline_code ?? null,
+          pi_status: raceResult.paymentIntent?.status ?? null,
+        });
+        setSubmitting(false);
+        setLocalError(msg);
+        onError(msg);
+        return;
+      }
+      await reportLog({
+        stage: 'after_confirm',
+        pi_status: raceResult.paymentIntent?.status ?? null,
+      });
+      setSubmitting(false);
       onSuccess();
+    } catch (thrown: unknown) {
+      const message = thrown instanceof Error ? thrown.message : 'Maksājums neizdevās.';
+      await reportLog({
+        stage,
+        error_type: 'unhandled_exception',
+        error_code: null,
+      });
+      setSubmitting(false);
+      setLocalError(message);
+      onError(message);
     }
   }
 
@@ -65,16 +134,18 @@ function PayForm({ amountCents, onSuccess, onError }: FormProps) {
 }
 
 interface Props {
+  rideId: number | null;
   clientSecret: string;
   publishableKey: string;
   amountCents: number;
+  onBeforeConfirm: () => void;
   onSuccess: () => void;
   onError: (msg: string) => void;
   onRetry: () => void;
   payError: string | null;
 }
 
-export default function StripePaymentForm({ clientSecret, publishableKey, amountCents, onSuccess, onError, onRetry, payError }: Props) {
+export default function StripePaymentForm({ rideId, clientSecret, publishableKey, amountCents, onBeforeConfirm, onSuccess, onError, onRetry, payError }: Props) {
   const [stripePromise, setStripePromise] = useState<Promise<Stripe | null> | null>(null);
 
   useEffect(() => {
@@ -96,7 +167,13 @@ export default function StripePaymentForm({ clientSecret, publishableKey, amount
 
   return (
     <Elements stripe={stripePromise} options={options}>
-      <PayForm amountCents={amountCents} onSuccess={onSuccess} onError={onError} />
+      <PayForm
+        rideId={rideId}
+        amountCents={amountCents}
+        onBeforeConfirm={onBeforeConfirm}
+        onSuccess={onSuccess}
+        onError={onError}
+      />
       {payError && (
         <button
           onClick={onRetry}

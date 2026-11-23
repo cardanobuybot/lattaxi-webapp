@@ -247,9 +247,29 @@ export async function createPaymentIntent(rideId: number): Promise<PaymentIntent
   return res.json();
 }
 
-export async function getPaymentStatus(rideId: number): Promise<{ ok: boolean; payment_status: string; authorized_amount_cents: number | null }> {
+export async function getPaymentStatus(rideId: number): Promise<{ ok: boolean; payment_status: string; authorized_amount_cents: number | null; pi_status: string | null }> {
   const res = await fetch(`${API}/rides/payment-status?ride_id=${rideId}`, { headers: authHeaders() });
   return res.json();
+}
+
+export interface PaymentClientLogPayload {
+  stage?: string | null;
+  error_type?: string | null;
+  error_code?: string | null;
+  decline_code?: string | null;
+  pi_status?: string | null;
+}
+
+export async function postPaymentClientLog(rideId: number, payload: PaymentClientLogPayload): Promise<void> {
+  try {
+    await fetch(`${API}/rides/${rideId}/payment-client-log`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify(payload),
+    });
+  } catch {
+    // diagnostics only — never throw
+  }
 }
 
 export async function createPaymentCheckout(rideId: number): Promise<{ ok: boolean; url?: string; session_id?: string; error?: string; pi_status?: string }> {
