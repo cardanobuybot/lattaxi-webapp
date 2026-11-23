@@ -385,26 +385,43 @@ export default function PassengerApp({ userId }: Props) {
     return () => clearTimeout(to);
   }, [ride?.id, step]);
 
+  const paymentPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const paymentPollRideRef = useRef<number | null>(null);
+  const stopPaymentPolling = useCallback(() => {
+    if (paymentPollRef.current) { clearInterval(paymentPollRef.current); paymentPollRef.current = null; }
+    paymentPollRideRef.current = null;
+    setPayPolling(false);
+  }, []);
   const startPaymentPolling = useCallback((rideId: number) => {
+    // Idempotent: already polling this ride → no-op (prevents double-interval
+    // when both the button handler and confirmPayment onSuccess trigger it).
+    if (paymentPollRideRef.current === rideId && paymentPollRef.current) return;
+    if (paymentPollRef.current) { clearInterval(paymentPollRef.current); }
+    paymentPollRideRef.current = rideId;
     setPayPolling(true);
     const start = Date.now();
-    const iv = setInterval(async () => {
+    paymentPollRef.current = setInterval(async () => {
       try {
         const ps = await getPaymentStatus(rideId);
-        if (ps.payment_status === 'authorized') {
-          clearInterval(iv);
-          setPayPolling(false);
+        const authorized = ps.payment_status === 'authorized' || ps.pi_status === 'requires_capture';
+        const failed = ps.pi_status === 'requires_payment_method' || ps.pi_status === 'canceled';
+        if (authorized) {
+          stopPaymentPolling();
+          setPayError(null);
           setStep('searching');
+        } else if (failed) {
+          stopPaymentPolling();
+          setPayError('Maksājums neizdevās. Mēģiniet vēlreiz.');
         } else if (Date.now() - start > 60_000) {
-          clearInterval(iv);
-          setPayPolling(false);
+          stopPaymentPolling();
           setPayError('Maksājums netika apstiprināts. Mēģiniet vēlreiz.');
         }
       } catch {
         // silent, keep polling
       }
     }, 2000);
-  }, []);
+  }, [stopPaymentPolling]);
+  useEffect(() => () => stopPaymentPolling(), [stopPaymentPolling]);
 
   const stopWalletPolling = useCallback(() => {
     if (walletPollRef.current) { clearInterval(walletPollRef.current); walletPollRef.current = null; }
@@ -1019,12 +1036,7 @@ export default function PassengerApp({ userId }: Props) {
               </div>
             </div>
 
-            {payPolling ? (
-              <div className="flex flex-col items-center gap-3 py-4">
-                <div className="w-8 h-8 border-2 border-[#FFCC00] border-t-transparent rounded-full animate-spin" />
-                <p className="text-slate-400 text-sm">Gaida maksājuma apstiprinājumu...</p>
-              </div>
-            ) : walletCheckoutPending ? (
+            {walletCheckoutPending ? (
               <div className="flex flex-col items-center gap-3 py-4 text-center">
                 <div className="w-8 h-8 border-2 border-[#FFCC00] border-t-transparent rounded-full animate-spin" />
                 <p className="text-white text-sm font-semibold">Gaidām apstiprinājumu no Apple Pay / Google Pay...</p>
@@ -1036,10 +1048,18 @@ export default function PassengerApp({ userId }: Props) {
               </div>
             ) : (
               <>
+                {payPolling && (
+                  <div className="flex items-center gap-2 py-2 text-slate-400 text-xs">
+                    <div className="w-3 h-3 border-2 border-[#FFCC00] border-t-transparent rounded-full animate-spin" />
+                    <span>Pārbauda maksājuma statusu...</span>
+                  </div>
+                )}
                 <StripePaymentForm
+                  rideId={ride?.id ?? null}
                   clientSecret={stripeClientSecret}
                   publishableKey={stripePublishableKey}
                   amountCents={stripeAmountCents}
+                  onBeforeConfirm={() => { if (ride) startPaymentPolling(ride.id); }}
                   onSuccess={() => { if (ride) startPaymentPolling(ride.id); }}
                   onError={msg => setPayError(msg)}
                   onRetry={handlePaymentRetry}
